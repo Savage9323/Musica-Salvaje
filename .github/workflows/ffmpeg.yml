@@ -1,0 +1,75 @@
+name: FFmpeg Video Render
+
+on:
+  workflow_dispatch:
+    inputs:
+      audio_url:
+        description: 'URL of the audio file (MP3)'
+        required: true
+        type: string
+      image_url:
+        description: 'URL of the cover image (JPG/PNG)'
+        required: true
+        type: string
+      output_name:
+        description: 'Output filename (e.g. MS-20260821-0001.mp4)'
+        required: true
+        type: string
+      callback_url:
+        description: 'Optional callback URL (POST with mp4_url)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Install FFmpeg
+        run: sudo apt-get install -y ffmpeg
+
+      - name: Download audio and cover image
+        run: |
+          curl -L "${{ github.event.inputs.audio_url }}" -o audio.mp3
+          curl -L "${{ github.event.inputs.image_url }}" -o cover.jpg
+
+      - name: Render MP4 (image + audio)
+        run: |
+          ffmpeg -loop 1 -i cover.jpg -i audio.mp3 \
+            -c:v libx264 -tune stillimage \
+            -c:a aac -b:a 192k \
+            -pix_fmt yuv420p \
+            -shortest \
+            "${{ github.event.inputs.output_name }}"
+
+      - name: Upload MP4 to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OUTPUT="${{ github.event.inputs.output_name }}"
+          # Create or update the 'latest-render' release
+          gh release view latest-render --repo "${{ github.repository }}" \
+            && gh release upload latest-render "$OUTPUT" --clobber --repo "${{ github.repository }}" \
+            || gh release create latest-render "$OUTPUT" \
+               --title "Latest Render" \
+               --notes "Auto-generated video renders from Música Salvaje" \
+               --repo "${{ github.repository }}"
+
+      - name: Get video URL and send callback
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OUTPUT="${{ github.event.inputs.output_name }}"
+          VIDEO_URL=$(gh release view latest-render --repo "${{ github.repository }}" \
+            --json assets \
+            --jq ".assets[] | select(.name == \"$OUTPUT\") | .browser_download_url")
+          echo "Video URL: $VIDEO_URL"
+          CALLBACK="${{ github.event.inputs.callback_url }}"
+          if [ -n "$CALLBACK" ]; then
+            curl -s -X POST "$CALLBACK" \
+              -H "Content-Type: application/json" \
+              -d "{\"mp4_url\":\"$VIDEO_URL\",\"output_name\":\"$OUTPUT\"}"
+          fi
