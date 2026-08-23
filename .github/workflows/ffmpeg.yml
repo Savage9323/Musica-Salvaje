@@ -1,75 +1,51 @@
-name: FFmpeg Video Render
+name: FFmpeg Render
 
 on:
   workflow_dispatch:
     inputs:
       audio_url:
-        description: 'URL of the audio file (MP3)'
+        description: URL of the audio file (MP3)
         required: true
-        type: string
       image_url:
-        description: 'URL of the cover image (JPG/PNG)'
-        required: true
-        type: string
-      output_name:
-        description: 'Output filename (e.g. MS-20260821-0001.mp4)'
-        required: true
-        type: string
-      callback_url:
-        description: 'Optional callback URL (POST with mp4_url)'
+        description: URL of the cover image (optional)
         required: false
-        type: string
         default: ''
+      output_name:
+        description: Output filename e.g. MS-20260822-1234.mp4
+        required: true
 
 jobs:
   render:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
       - name: Install FFmpeg
         run: sudo apt-get install -y ffmpeg
 
-      - name: Download audio and cover image
-        run: |
-          curl -L "${{ github.event.inputs.audio_url }}" -o audio.mp3
-          curl -L "${{ github.event.inputs.image_url }}" -o cover.jpg
+      - name: Download audio
+        run: curl -L "${{ inputs.audio_url }}" -o audio.mp3
 
-      - name: Render MP4 (image + audio)
+      - name: Download or create cover image
+        run: |
+          if [ -n "${{ inputs.image_url }}" ]; then
+            curl -L "${{ inputs.image_url }}" -o cover.jpg
+          else
+            ffmpeg -f lavfi -i color=c=black:size=1024x1024:rate=1 -frames:v 1 cover.jpg
+          fi
+
+      - name: Render video
         run: |
           ffmpeg -loop 1 -i cover.jpg -i audio.mp3 \
-            -c:v libx264 -tune stillimage \
-            -c:a aac -b:a 192k \
-            -pix_fmt yuv420p \
-            -shortest \
-            "${{ github.event.inputs.output_name }}"
+            -c:v libx264 -tune stillimage -c:a aac -b:a 192k \
+            -pix_fmt yuv420p -shortest \
+            "${{ inputs.output_name }}"
 
-      - name: Upload MP4 to GitHub Release
+      - name: Create release and upload
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          OUTPUT="${{ github.event.inputs.output_name }}"
-          # Create or update the 'latest-render' release
-          gh release view latest-render --repo "${{ github.repository }}" \
-            && gh release upload latest-render "$OUTPUT" --clobber --repo "${{ github.repository }}" \
-            || gh release create latest-render "$OUTPUT" \
-               --title "Latest Render" \
-               --notes "Auto-generated video renders from Música Salvaje" \
-               --repo "${{ github.repository }}"
-
-      - name: Get video URL and send callback
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          OUTPUT="${{ github.event.inputs.output_name }}"
-          VIDEO_URL=$(gh release view latest-render --repo "${{ github.repository }}" \
-            --json assets \
-            --jq ".assets[] | select(.name == \"$OUTPUT\") | .browser_download_url")
-          echo "Video URL: $VIDEO_URL"
-          CALLBACK="${{ github.event.inputs.callback_url }}"
-          if [ -n "$CALLBACK" ]; then
-            curl -s -X POST "$CALLBACK" \
-              -H "Content-Type: application/json" \
-              -d "{\"mp4_url\":\"$VIDEO_URL\",\"output_name\":\"$OUTPUT\"}"
-          fi
+          TAG="${{ inputs.output_name }}"
+          TAG="${TAG%.mp4}"
+          gh release create "$TAG" "${{ inputs.output_name }}" \
+            --title "Render $TAG" \
+            --notes "Auto-rendered by Musica Salvaje" \
+            --repo "${{ github.repository }}"
