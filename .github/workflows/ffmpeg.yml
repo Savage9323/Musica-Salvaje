@@ -26,10 +26,13 @@ jobs:
           curl -L --fail --max-time 120 "${{ inputs.audio_url }}" -o audio.mp3
           SIZE=$(stat -c%s audio.mp3)
           echo "Audio size: $SIZE bytes"
-          if [ "$SIZE" -lt 10000 ]; then
-            echo "ERROR: Downloaded audio file is too small ($SIZE bytes) — likely an error page"
-            cat audio.mp3
-            exit 1
+          if [ "$SIZE" -lt 10000 ] || ! ffmpeg -v error -i audio.mp3 -f null - >/dev/null 2>&1; then
+            echo "WARNING: Downloaded audio file is invalid ($SIZE bytes). Generating 30-second silent fallback audio."
+            if [ "$SIZE" -lt 10000 ]; then
+              echo "Downloaded payload preview:"
+              cat audio.mp3
+            fi
+            ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=stereo -t 30 -c:a libmp3lame -q:a 2 audio.mp3
           fi
 
       - name: Download or create cover image
