@@ -22,19 +22,34 @@ jobs:
         run: sudo apt-get install -y ffmpeg
 
       - name: Download audio
-        run: curl -L "${{ inputs.audio_url }}" -o audio.mp3
+        run: |
+          curl -L --fail --max-time 120 "${{ inputs.audio_url }}" -o audio.mp3
+          SIZE=$(stat -c%s audio.mp3)
+          echo "Audio size: $SIZE bytes"
+          if [ "$SIZE" -lt 10000 ]; then
+            echo "ERROR: Downloaded audio file is too small ($SIZE bytes) — likely an error page"
+            cat audio.mp3
+            exit 1
+          fi
 
       - name: Download or create cover image
         run: |
           if [ -n "${{ inputs.image_url }}" ]; then
-            curl -L "${{ inputs.image_url }}" -o cover.jpg
+            curl -L --fail --max-time 60 "${{ inputs.image_url }}" -o cover.jpg || \
+              ffmpeg -y -f lavfi -i color=c=black:size=1024x1024:rate=1 -frames:v 1 cover.jpg
           else
-            ffmpeg -f lavfi -i color=c=black:size=1024x1024:rate=1 -frames:v 1 cover.jpg
+            ffmpeg -y -f lavfi -i color=c=black:size=1024x1024:rate=1 -frames:v 1 cover.jpg
+          fi
+          SIZE=$(stat -c%s cover.jpg)
+          echo "Image size: $SIZE bytes"
+          if [ "$SIZE" -lt 1000 ]; then
+            echo "WARNING: Cover image very small ($SIZE bytes), regenerating black frame"
+            ffmpeg -y -f lavfi -i color=c=black:size=1024x1024:rate=1 -frames:v 1 cover.jpg
           fi
 
       - name: Render video
         run: |
-          ffmpeg -loop 1 -i cover.jpg -i audio.mp3 \
+          ffmpeg -y -loop 1 -i cover.jpg -i audio.mp3 \
             -c:v libx264 -tune stillimage -c:a aac -b:a 192k \
             -pix_fmt yuv420p -shortest \
             "${{ inputs.output_name }}"
