@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "musica-salvaje-agent",
-  "main": "src/worker.ts",
+  "main": "src/gateway.ts",
   "compatibility_date": "2026-08-31",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
@@ -12,21 +12,25 @@
   },
   "durable_objects": {
     "bindings": [
-      { "name": "MusicaSalvajeAgent", "class_name": "MusicaSalvajeAgent" }
+      { "name": "MusicaSalvajeAgent", "class_name": "MusicaSalvajeAgent" },
+      { "name": "BudgetGate", "class_name": "BudgetGate" }
     ]
   },
   "r2_buckets": [
     { "binding": "MEDIA", "bucket_name": "musica-salvaje-media" }
   ],
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["MusicaSalvajeAgent"] }
+    { "tag": "v1", "new_sqlite_classes": ["MusicaSalvajeAgent"] },
+    { "tag": "v2", "new_classes": ["BudgetGate"] }
   ],
   "vars": {
     "TEST_MODE": "true",
+    "LIVE_GENERATION_ENABLED": "false",
     "LYRICS_PROVIDER": "mock",
     "QUALITY_GATE": "8",
     "MAX_LYRIC_REVISIONS": "2",
     "MAX_DAILY_PAID_GENERATIONS": "2",
+    "MAX_MONTHLY_PAID_GENERATIONS": "0",
     "MIN_SUNO_CREDITS": "1",
     "SUNO_BASE_URL": "https://api.sunoapi.org/api/v1",
     "SUNO_MODEL": "V5",

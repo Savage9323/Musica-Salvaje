@@ -1,9 +1,14 @@
 # Start with free testing. Copy this file to .dev.vars.
 TEST_MODE=true
+LIVE_GENERATION_ENABLED=false
 LYRICS_PROVIDER=mock
 PUBLIC_BASE_URL=http://localhost:8787
 
-# Free live-LLM test option (no Suno spend):
+# Optional admin auth. Required before live mode.
+# Generate a long random value and store it only as a secret.
+# ADMIN_API_TOKEN=replace_me
+
+# Free/low-cost real-LLM test option without Suno spend:
 # LYRICS_PROVIDER=groq
 # GROQ_API_KEY=replace_me
 # GROQ_MODEL=openai/gpt-oss-120b
@@ -15,6 +20,7 @@ PUBLIC_BASE_URL=http://localhost:8787
 
 # Paid music generation. Leave unset while testing.
 # TEST_MODE=false
+# LIVE_GENERATION_ENABLED=true
 # PUBLIC_BASE_URL=https://your-worker.workers.dev
 # SUNO_API_KEY=replace_me
 # SUNO_CALLBACK_SECRET=generate_a_long_random_secret
@@ -27,8 +33,16 @@ PUBLIC_BASE_URL=http://localhost:8787
 # GITHUB_RENDER_WORKFLOW=ffmpeg.yml
 # GITHUB_RENDER_REF=main
 
-# Guardrails
+# YouTube OAuth. Leave unset until private-upload testing.
+# YOUTUBE_CLIENT_ID=replace_me
+# YOUTUBE_CLIENT_SECRET=replace_me
+# YOUTUBE_REFRESH_TOKEN=replace_me
+YOUTUBE_CONTAINS_SYNTHETIC_MEDIA=true
+
+# Guardrails.
+# Live mode fails closed unless DAILY and MONTHLY generation limits are positive.
 QUALITY_GATE=8
 MAX_LYRIC_REVISIONS=2
 MAX_DAILY_PAID_GENERATIONS=2
+MAX_MONTHLY_PAID_GENERATIONS=0
 MIN_SUNO_CREDITS=1
