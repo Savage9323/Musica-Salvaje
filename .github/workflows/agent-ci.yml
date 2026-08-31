@@ -1,0 +1,40 @@
+name: Agent CI
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install
+      - run: npm run check
+
+  free-render-smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure FFmpeg
+        run: command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+      - name: Generate free local fixtures
+        run: |
+          ffmpeg -y -f lavfi -i "sine=frequency=440:duration=1.5" -codec:a libmp3lame -b:a 64k /tmp/mock-tone.mp3
+          ffmpeg -y -f lavfi -i "color=c=black:size=1024x1024:rate=1" -frames:v 1 /tmp/mock-cover.jpg
+          test "$(stat -c%s /tmp/mock-tone.mp3)" -gt 10000
+          test "$(stat -c%s /tmp/mock-cover.jpg)" -gt 1000
+      - name: Verify FFmpeg fixture rendering without API spend
+        run: |
+          ffmpeg -y -loop 1 -i /tmp/mock-cover.jpg -i /tmp/mock-tone.mp3 \
+            -c:v libx264 -tune stillimage -c:a aac -b:a 128k \
+            -pix_fmt yuv420p -shortest /tmp/musica-salvaje-smoke.mp4
+          test -s /tmp/musica-salvaje-smoke.mp4
+          ffprobe -v error -show_entries format=duration -of default=nw=1 /tmp/musica-salvaje-smoke.mp4
