@@ -1,0 +1,251 @@
+name: ACE-Step Free CPU Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: "Generated audio duration for the CPU feasibility test"
+        required: true
+        default: "10"
+        type: choice
+        options:
+          - "10"
+          - "20"
+          - "30"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ace-step-free-cpu-benchmark
+  cancel-in-progress: false
+
+jobs:
+  cpu-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ACESTEP_COMMIT: ca1e85fe9430179831e6bc6be790c332190a3866
+      ACESTEP_INIT_LLM: "false"
+      ACESTEP_COMPILE_MODEL: "false"
+      ACE_STEP_SUPPRESS_AUDIO_TOKENS: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TOKENIZERS_PARALLELISM: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Record runner baseline
+        shell: bash
+        run: |
+          mkdir -p benchmark
+          {
+            echo "# ACE-Step 1.5 free CPU benchmark"
+            echo
+            echo "- Started (UTC): $(date -u +%FT%TZ)"
+            echo "- Runner: $RUNNER_NAME / $RUNNER_OS / $RUNNER_ARCH"
+            echo "- Upstream commit: $ACESTEP_COMMIT"
+            echo "- Requested duration: ${{ inputs.duration_seconds }} seconds"
+            echo "- GitHub run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "## CPU"
+            echo '```'
+            lscpu | sed -n '1,24p'
+            echo '```'
+            echo
+            echo "## Memory"
+            echo '```'
+            free -h
+            echo '```'
+            echo
+            echo "## Disk before cleanup"
+            echo '```'
+            df -h /
+            echo '```'
+          } > benchmark/report.md
+
+      - name: Reclaim unused runner disk
+        shell: bash
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup || true
+          sudo apt-get clean || true
+          {
+            echo
+            echo "## Disk after cleanup"
+            echo '```'
+            df -h /
+            echo '```'
+          } >> benchmark/report.md
+
+      - name: Install benchmark tooling
+        shell: bash
+        run: |
+          python -m pip install --disable-pip-version-check uv
+          if ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+          uv --version | tee benchmark/uv-version.txt
+          python --version | tee benchmark/python-version.txt
+
+      - name: Clone pinned ACE-Step
+        shell: bash
+        run: |
+          git clone --filter=blob:none https://github.com/ace-step/ACE-Step-1.5.git ace-step
+          cd ace-step
+          git checkout --detach "$ACESTEP_COMMIT"
+          test "$(git rev-parse HEAD)" = "$ACESTEP_COMMIT"
+
+      - name: Convert ephemeral checkout to CPU-only PyTorch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("ace-step/pyproject.toml")
+          text = path.read_text()
+          replacements = {
+              '"torch==2.10.0+cu128; sys_platform == \'linux\' and platform_machine == \'x86_64\'"': '"torch==2.10.0+cpu; sys_platform == \'linux\' and platform_machine == \'x86_64\'"',
+              '"torchvision==0.25.0+cu128; sys_platform == \'linux\' and platform_machine == \'x86_64\'"': '"torchvision==0.25.0+cpu; sys_platform == \'linux\' and platform_machine == \'x86_64\'"',
+              '"torchaudio==2.10.0+cu128; sys_platform == \'linux\' and platform_machine == \'x86_64\'"': '"torchaudio==2.10.0+cpu; sys_platform == \'linux\' and platform_machine == \'x86_64\'"',
+              'name = "pytorch-cu128"': 'name = "pytorch-cpu"',
+              'url = "https://download.pytorch.org/whl/cu128"': 'url = "https://download.pytorch.org/whl/cpu"',
+              '{ index = "pytorch-cu128", marker = "sys_platform == \'win32\' or (sys_platform == \'linux\' and platform_machine == \'x86_64\')" }': '{ index = "pytorch-cpu", marker = "sys_platform == \'linux\' and platform_machine == \'x86_64\'" }',
+              '    "nano-vllm; sys_platform != \'darwin\' or platform_machine != \'arm64\'",\n': '',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f"Pinned upstream packaging changed; missing expected text: {old}")
+              text = text.replace(old, new)
+          # Resolve only the environment used by this benchmark. This avoids pulling
+          # unrelated Windows/aarch64 CUDA packages into uv's cross-platform lock.
+          start = text.index("required-environments = [")
+          end = text.index("]", start) + 1
+          text = text[:start] + 'required-environments = [\n    "sys_platform == \'linux\' and platform_machine == \'x86_64\'",\n]' + text[end:]
+          path.write_text(text)
+          PY
+          grep -nE 'torch==2.10.0|pytorch-cpu|required-environments' ace-step/pyproject.toml | head -20
+
+      - name: Install ACE-Step CPU environment
+        id: install
+        shell: bash
+        run: |
+          START=$(date +%s)
+          set +e
+          (cd ace-step && uv sync --no-dev --python "$(command -v python)" --no-install-package nano-vllm) 2>&1 | tee benchmark/install.log
+          STATUS=${PIPESTATUS[0]}
+          set -e
+          END=$(date +%s)
+          echo "seconds=$((END-START))" >> "$GITHUB_OUTPUT"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          {
+            echo
+            echo "## Installation"
+            echo "- Exit code: $STATUS"
+            echo "- Wall time: $((END-START)) seconds"
+            echo
+            echo "### Disk after dependencies"
+            echo '```'
+            df -h /
+            echo '```'
+          } >> benchmark/report.md
+          if [ "$STATUS" -ne 0 ]; then exit "$STATUS"; fi
+
+      - name: Write deterministic DiT-only benchmark config
+        shell: bash
+        run: |
+          cat > ace-step/benchmark.toml <<'EOF'
+          project_root = "."
+          config_path = "acestep-v15-turbo"
+          checkpoint_dir = "checkpoints"
+          backend = "pt"
+          device = "cpu"
+          offload_to_cpu = false
+          offload_dit_to_cpu = false
+          save_dir = "output"
+          audio_format = "wav"
+          caption = "regional Mexican instrumental, accordion, bajo sexto, warm acoustic bass, restrained percussion, emotional cinematic progression, organic live ensemble"
+          lyrics = "[Instrumental]"
+          instrumental = true
+          vocal_language = "es"
+          task_type = "text2music"
+          inference_steps = 8
+          seed = 9323
+          use_random_seed = false
+          thinking = false
+          use_cot_metas = false
+          use_cot_caption = false
+          use_cot_lyrics = false
+          use_cot_language = false
+          batch_size = 1
+          EOF
+          echo 'duration = ${{ inputs.duration_seconds }}' >> ace-step/benchmark.toml
+          cat ace-step/benchmark.toml
+
+      - name: Generate with ACE-Step on CPU
+        id: generate
+        shell: bash
+        run: |
+          START=$(date +%s)
+          set +e
+          (cd ace-step && /usr/bin/time -v -o ../benchmark/time.txt uv run --no-sync python cli.py -c benchmark.toml --backend pt) 2>&1 | tee benchmark/generation.log
+          STATUS=${PIPESTATUS[0]}
+          set -e
+          END=$(date +%s)
+          echo "seconds=$((END-START))" >> "$GITHUB_OUTPUT"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          {
+            echo
+            echo "## Generation"
+            echo "- Exit code: $STATUS"
+            echo "- Wall time: $((END-START)) seconds"
+            echo
+            echo "### Resource measurements"
+            echo '```'
+            cat benchmark/time.txt 2>/dev/null || true
+            echo '```'
+            echo
+            echo "### Disk after model/generation"
+            echo '```'
+            df -h /
+            echo '```'
+          } >> benchmark/report.md
+          if [ "$STATUS" -ne 0 ]; then exit "$STATUS"; fi
+
+      - name: Validate generated audio
+        shell: bash
+        run: |
+          AUDIO=$(find ace-step/output -type f \( -iname '*.wav' -o -iname '*.flac' -o -iname '*.mp3' \) -print -quit)
+          if [ -z "$AUDIO" ]; then
+            echo "No generated audio file found" >&2
+            exit 1
+          fi
+          echo "$AUDIO" > benchmark/audio-path.txt
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "$AUDIO" | tee benchmark/ffprobe.txt
+          cp "$AUDIO" benchmark/ace-step-sample.${AUDIO##*.}
+          {
+            echo
+            echo "## Output validation"
+            echo '```'
+            cat benchmark/ffprobe.txt
+            echo '```'
+            echo
+            echo "**Result: ACE-Step produced a valid audio file on a standard free GitHub CPU runner.**"
+          } >> benchmark/report.md
+
+      - name: Publish benchmark summary
+        if: always()
+        shell: bash
+        run: |
+          cat benchmark/report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ace-step-cpu-benchmark-${{ github.run_id }}
+          path: benchmark/
+          if-no-files-found: warn
+          retention-days: 7
