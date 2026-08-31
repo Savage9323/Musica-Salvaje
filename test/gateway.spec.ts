@@ -37,11 +37,13 @@ describe("live-spend gateway", () => {
   });
 
   it("fails closed on a live request while the live switch is disabled", async () => {
+    const token = "test-admin-token";
+    const lockedLive = withEnv({ TEST_MODE: "true", ALLOW_UNAUTHENTICATED_TEST_API: "false", ADMIN_API_TOKEN: token, LIVE_GENERATION_ENABLED: "false" });
     const response = await gateway.fetch(new Request("http://example.com/api/songs", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ idea: "Una canción que nunca debe llegar a un proveedor pagado en esta prueba", testOnly: false })
-    }), testEnv);
+    }), lockedLive);
     expect(response.status).toBe(423);
     const body = await response.json() as { error: string };
     expect(body.error).toContain("Live generation is locked");
