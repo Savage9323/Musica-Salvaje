@@ -198,7 +198,7 @@ function jsonError(message: string, status = 400) {
   return Response.json({ ok: false, error: message }, { status });
 }
 
-function makeTestWav(seconds = 1.5, sampleRate = 8000, frequency = 440): Uint8Array {
+function makeTestWav(seconds = 1.5, sampleRate = 8000, frequency = 440): ArrayBuffer {
   const samples = Math.floor(seconds * sampleRate);
   const dataBytes = samples * 2;
   const buffer = new ArrayBuffer(44 + dataBytes);
@@ -223,7 +223,7 @@ function makeTestWav(seconds = 1.5, sampleRate = 8000, frequency = 440): Uint8Ar
     const sample = Math.sin((2 * Math.PI * frequency * i) / sampleRate) * 0.18;
     view.setInt16(44 + i * 2, Math.round(sample * 32767), true);
   }
-  return new Uint8Array(buffer);
+  return buffer;
 }
 
 function testCoverSvg(): string {
