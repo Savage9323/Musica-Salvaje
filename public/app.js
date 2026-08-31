@@ -9,6 +9,7 @@ const adminToken = $("#adminToken");
 let budget = null;
 let liveBudget = null;
 let busy = false;
+let catalog = new Map();
 
 adminToken.value = sessionStorage.getItem("msAdminToken") || "";
 
@@ -91,7 +92,37 @@ async function refreshBudget() {
   }
 }
 
+async function enrichSong(song) {
+  const result = { ...song };
+  if (["RENDERING", "RENDER_FAILED"].includes(song.status)) {
+    try { result.render = (await api(`/api/songs/${encodeURIComponent(song.catalogId)}/render`)).render; } catch { /* card still renders */ }
+  }
+  if (song.status === "READY_TO_PUBLISH") {
+    try { result.publishing = (await api(`/api/songs/${encodeURIComponent(song.catalogId)}/publishing`)).publishing; } catch { /* card still renders */ }
+  }
+  return result;
+}
+
+function recoveryControls(song) {
+  const controls = [];
+  const publishing = song.publishing;
+  if (song.status === "RENDER_FAILED") controls.push(`<button class="ghost" type="button" data-action="retry-render" data-id="${escapeHtml(song.catalogId)}">Retry render</button>`);
+  if (publishing?.status === "FAILED" && publishing.video_url) controls.push(`<button class="ghost" type="button" data-action="retry-upload" data-id="${escapeHtml(song.catalogId)}">Retry private upload</button>`);
+  if (publishing?.status === "PRIVATE_READY") controls.push(`<button class="primary" type="button" data-action="publish" data-id="${escapeHtml(song.catalogId)}">Approve & publish</button>`);
+  return controls.length ? `<div class="actions">${controls.join("")}</div>` : "";
+}
+
+function pipelineInfo(song) {
+  const bits = [];
+  if (song.render?.status) bits.push(`Render: ${readableStatus(song.render.status)}`);
+  if (song.publishing?.status) bits.push(`YouTube: ${readableStatus(song.publishing.status)}`);
+  if (song.publishing?.error) bits.push(`Upload error: ${song.publishing.error}`);
+  if (!bits.length) return "";
+  return `<p class="song-idea ${song.publishing?.error ? "error-text" : ""}">${escapeHtml(bits.join(" · "))}</p>`;
+}
+
 function renderSongs(list) {
+  catalog = new Map(list.map((song) => [song.catalogId, song]));
   $("#songCount").textContent = `${list.length} ${list.length === 1 ? "song" : "songs"}`;
   if (!list.length) {
     songsNode.innerHTML = $("#emptyTemplate").innerHTML;
@@ -110,7 +141,8 @@ function renderSongs(list) {
         <div>
           <div class="song-head"><h3>${escapeHtml(song.title || song.catalogId)}</h3><span class="status ${statusClass(song.status)}">${escapeHtml(readableStatus(song.status))}</span></div>
           <div class="song-meta">${escapeHtml(song.catalogId)} · <span class="score">${song.qualityScore == null ? "—" : `${escapeHtml(song.qualityScore)}/10`}</span> · ${escapeHtml(song.lyricsProvider || "pending")}</div>
-          <p class="song-idea">${escapeHtml(song.idea)}</p>${error}
+          <p class="song-idea">${escapeHtml(song.idea)}</p>${error}${pipelineInfo(song)}
+          ${recoveryControls(song)}
         </div>
       </div>
       ${audio ? `<div class="tracks">${audio}</div>` : ""}
@@ -122,7 +154,8 @@ function renderSongs(list) {
 async function refreshCatalog() {
   try {
     const body = await api("/api/songs?limit=50");
-    renderSongs(body.songs || []);
+    const list = await Promise.all((body.songs || []).map(enrichSong));
+    renderSongs(list);
   } catch (error) {
     songsNode.innerHTML = `<div class="empty error-text">${escapeHtml(error.message)}</div>`;
   }
@@ -157,6 +190,46 @@ $("#clearToken").addEventListener("click", async () => {
   await refreshAll();
 });
 adminToken.addEventListener("keydown", (event) => { if (event.key === "Enter") $("#unlock").click(); });
+
+songsNode.addEventListener("click", async (event) => {
+  if (!(event.target instanceof Element)) return;
+  const button = event.target.closest("button[data-action]");
+  if (!button) return;
+  const id = button.dataset.id;
+  const action = button.dataset.action;
+  const song = catalog.get(id);
+  if (!song) return;
+  button.disabled = true;
+  try {
+    if (action === "retry-render") {
+      activity.textContent = `Retrying render for ${id}. Music will not be regenerated.`;
+      await api(`/api/songs/${encodeURIComponent(id)}/render`, { method: "POST" });
+    } else if (action === "retry-upload") {
+      const videoUrl = song.publishing?.video_url;
+      if (!videoUrl) throw new Error("Existing rendered video URL is unavailable");
+      activity.textContent = `Retrying private YouTube upload for ${id}.`;
+      await api(`/api/songs/${encodeURIComponent(id)}/publishing/prepare`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoUrl })
+      });
+    } else if (action === "publish") {
+      if (!confirm(`Publish ${song.title || id} publicly on YouTube? This changes the already-uploaded private video to public.`)) return;
+      activity.textContent = `Publishing ${id} publicly…`;
+      await api(`/api/songs/${encodeURIComponent(id)}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved: true })
+      });
+    }
+    activity.textContent = `${id}: operation completed.`;
+    await refreshAll();
+  } catch (error) {
+    activity.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
 
 generate.addEventListener("click", async () => {
   if (busy) return;
