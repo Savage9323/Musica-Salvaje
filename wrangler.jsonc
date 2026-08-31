@@ -28,11 +28,15 @@
     "TEST_MODE": "true",
     "LYRICS_PROVIDER": "mock",
     "QUALITY_GATE": "8",
+    "MAX_LYRIC_REVISIONS": "2",
     "MAX_DAILY_PAID_GENERATIONS": "2",
     "MIN_SUNO_CREDITS": "1",
     "SUNO_BASE_URL": "https://api.sunoapi.org/api/v1",
     "SUNO_MODEL": "V5",
     "GROQ_MODEL": "openai/gpt-oss-120b",
-    "XAI_MODEL": "grok-4.3"
+    "XAI_MODEL": "grok-4.3",
+    "GITHUB_REPO": "Savage9323/Musica-Salvaje",
+    "GITHUB_RENDER_WORKFLOW": "ffmpeg.yml",
+    "GITHUB_RENDER_REF": "main"
   }
 }

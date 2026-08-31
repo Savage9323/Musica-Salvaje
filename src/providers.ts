@@ -1,4 +1,4 @@
-import type { LyricsPackage, MusicResult, QualityScores, SongRequest } from "./types";
+import type { LyricsPackage, MusicResult, MusicTaskStatus, MusicTrack, QualityScores, SongRequest } from "./types";
 
 const ARTIST_NAMES = [
   "grupo firme",
@@ -76,15 +76,48 @@ export function mockLyrics(request: SongRequest): LyricsPackage {
     negativeStyles: ["EDM", "trap hi-hats", "synthetic pop vocal", "comedy"],
     qualityScores: scores,
     overallScore: 9,
-    revisionCount: 1
+    revisionCount: 0
   };
 }
 
 function lyricSystemPrompt(): string {
-  return `You are the songwriting and quality-control engine for Música Salvaje. Create FINISHED original lyrics, not a draft. Do not imitate or name real recording artists. If the request references an artist, convert that reference into generic musical characteristics and omit the artist name. Use natural Spanish unless English is explicitly requested. Use section labels [Intro], [Verse 1], [Pre-Chorus], [Chorus], [Verse 2], [Bridge], [Final Chorus], [Outro]. Internally critique and revise the song before answering. Return JSON only with keys: title, lyrics, stylePrompt, negativeStyles, qualityScores, overallScore, revisionCount. qualityScores must include originality, storytelling, natural_spanish, emotional_impact, singability, chorus_strength, rhyme_quality, regional_authenticity, style_match, commercial_potential, each 0-10. Aim for overallScore >= 8 and every dimension >= 7. stylePrompt must describe genre, subgenre, BPM, mood, energy, instruments, vocal type and dynamics without artist names.`;
+  return `You are the songwriting and quality-control engine for Música Salvaje. Create FINISHED original lyrics, not a draft. Do not imitate or name real recording artists. If the request references an artist, convert that reference into generic musical characteristics and omit the artist name. Use natural Spanish unless English is explicitly requested. Use section labels [Intro], [Verse 1], [Pre-Chorus], [Chorus], [Verse 2], [Bridge], [Final Chorus], [Outro]. Return JSON only with keys: title, lyrics, stylePrompt, negativeStyles, qualityScores, overallScore, revisionCount. qualityScores must include originality, storytelling, natural_spanish, emotional_impact, singability, chorus_strength, rhyme_quality, regional_authenticity, style_match, commercial_potential, each 0-10. Be strict and do not inflate scores. Aim for overallScore >= 8 and every dimension >= 7. stylePrompt must describe genre, subgenre, BPM, mood, energy, instruments, vocal type and dynamics without artist names.`;
 }
 
-async function callOpenAICompatible(baseUrl: string, apiKey: string, model: string, request: SongRequest): Promise<LyricsPackage> {
+async function callOpenAICompatible(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  request: SongRequest,
+  previous?: LyricsPackage,
+  revisionNumber = 0
+): Promise<LyricsPackage> {
+  const userPayload = previous
+    ? {
+        task: "Revise the previous finished song. Fix every weak quality dimension, improve specificity and hook strength, preserve the core story, and return a complete replacement song. Do not explain your changes.",
+        revisionNumber,
+        request: {
+          idea: request.idea,
+          language: request.language ?? "es",
+          genre: request.genre ?? "regional Mexican",
+          mood: request.mood ?? [],
+          instrumental: request.instrumental ?? false,
+          targetDurationSeconds: 165
+        },
+        previous
+      }
+    : {
+        task: "Write the finished song and score it strictly before returning it.",
+        request: {
+          idea: request.idea,
+          language: request.language ?? "es",
+          genre: request.genre ?? "regional Mexican",
+          mood: request.mood ?? [],
+          instrumental: request.instrumental ?? false,
+          targetDurationSeconds: 165
+        }
+      };
+
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -97,17 +130,7 @@ async function callOpenAICompatible(baseUrl: string, apiKey: string, model: stri
       max_completion_tokens: 4096,
       messages: [
         { role: "system", content: lyricSystemPrompt() },
-        {
-          role: "user",
-          content: JSON.stringify({
-            idea: request.idea,
-            language: request.language ?? "es",
-            genre: request.genre ?? "regional Mexican",
-            mood: request.mood ?? [],
-            instrumental: request.instrumental ?? false,
-            targetDurationSeconds: 165
-          })
-        }
+        { role: "user", content: JSON.stringify(userPayload) }
       ]
     })
   });
@@ -124,43 +147,42 @@ async function callOpenAICompatible(baseUrl: string, apiKey: string, model: stri
     negativeStyles: Array.isArray(raw.negativeStyles) ? raw.negativeStyles.map(String).slice(0, 12) : [],
     qualityScores,
     overallScore: clampScore(raw.overallScore),
-    revisionCount: Math.max(0, Math.min(2, Number(raw.revisionCount ?? 0) || 0))
+    revisionCount
   };
-}
-
-export async function generateLyrics(env: Env, request: SongRequest): Promise<{ provider: string; package: LyricsPackage }> {
-  const provider = env.LYRICS_PROVIDER ?? "mock";
-  if (provider === "mock") return { provider: "mock", package: mockLyrics(request) };
-  if (provider === "groq") {
-    if (!env.GROQ_API_KEY) throw new Error("GROQ_API_KEY is required when LYRICS_PROVIDER=groq");
-    return {
-      provider: "groq",
-      package: await callOpenAICompatible(
-        "https://api.groq.com/openai/v1",
-        env.GROQ_API_KEY,
-        env.GROQ_MODEL ?? "openai/gpt-oss-120b",
-        request
-      )
-    };
-  }
-  if (provider === "xai") {
-    if (!env.XAI_API_KEY) throw new Error("XAI_API_KEY is required when LYRICS_PROVIDER=xai");
-    return {
-      provider: "xai",
-      package: await callOpenAICompatible(
-        "https://api.x.ai/v1",
-        env.XAI_API_KEY,
-        env.XAI_MODEL ?? "grok-4.3",
-        request
-      )
-    };
-  }
-  throw new Error(`Unsupported lyrics provider: ${provider}`);
 }
 
 export function passesQuality(pkg: LyricsPackage, gate: number): boolean {
   if (pkg.overallScore < gate) return false;
   return Object.values(pkg.qualityScores).every((score) => score >= 7);
+}
+
+export async function generateLyrics(env: Env, request: SongRequest): Promise<{ provider: string; package: LyricsPackage }> {
+  const provider = env.LYRICS_PROVIDER ?? "mock";
+  if (provider === "mock") return { provider: "mock", package: mockLyrics(request) };
+
+  let baseUrl: string;
+  let apiKey: string | undefined;
+  let model: string;
+  if (provider === "groq") {
+    baseUrl = "https://api.groq.com/openai/v1";
+    apiKey = env.GROQ_API_KEY;
+    model = env.GROQ_MODEL ?? "openai/gpt-oss-120b";
+  } else if (provider === "xai") {
+    baseUrl = "https://api.x.ai/v1";
+    apiKey = env.XAI_API_KEY;
+    model = env.XAI_MODEL ?? "grok-4.3";
+  } else {
+    throw new Error(`Unsupported lyrics provider: ${provider}`);
+  }
+  if (!apiKey) throw new Error(`${provider === "xai" ? "XAI_API_KEY" : "GROQ_API_KEY"} is required when LYRICS_PROVIDER=${provider}`);
+
+  const gate = Math.max(0, Math.min(10, Number(env.QUALITY_GATE ?? "8")));
+  const maxRevisions = Math.max(0, Math.min(4, Math.trunc(Number(env.MAX_LYRIC_REVISIONS ?? "2"))));
+  let current = await callOpenAICompatible(baseUrl, apiKey, model, request, undefined, 0);
+  for (let revision = 1; revision <= maxRevisions && !passesQuality(current, gate); revision++) {
+    current = await callOpenAICompatible(baseUrl, apiKey, model, request, current, revision);
+  }
+  return { provider, package: current };
 }
 
 export async function getSunoCredits(env: Env): Promise<number> {
@@ -174,6 +196,46 @@ export async function getSunoCredits(env: Env): Promise<number> {
   return body.data;
 }
 
+function normalizeSunoTracks(raw: Array<Record<string, unknown>>): MusicTrack[] {
+  return raw.flatMap((track, index) => {
+    const audioUrl = String(track.audio_url ?? track.audioUrl ?? "");
+    if (!audioUrl) return [];
+    return [{
+      id: String(track.id ?? `track-${index + 1}`),
+      audioUrl,
+      imageUrl: String(track.image_url ?? track.imageUrl ?? "") || undefined,
+      durationSeconds: Number(track.duration ?? 0) || undefined,
+      title: String(track.title ?? `Track ${index + 1}`)
+    }];
+  });
+}
+
+export async function getSunoTaskStatus(env: Env, taskId: string): Promise<MusicTaskStatus> {
+  if (!env.SUNO_API_KEY) throw new Error("SUNO_API_KEY is not configured");
+  const endpoint = new URL(`${env.SUNO_BASE_URL ?? "https://api.sunoapi.org/api/v1"}/generate/record-info`);
+  endpoint.searchParams.set("taskId", taskId);
+  const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${env.SUNO_API_KEY}` } });
+  const body = (await response.json()) as {
+    code?: number;
+    msg?: string;
+    data?: {
+      status?: string;
+      errorMessage?: string | null;
+      response?: { sunoData?: Array<Record<string, unknown>> };
+    };
+  };
+  if (!response.ok || body.code !== 200) throw new Error(`Suno status check failed: ${body.msg ?? `HTTP ${response.status}`}`);
+  const providerStatus = String(body.data?.status ?? "PENDING");
+  if (providerStatus === "SUCCESS") {
+    return { status: "SUCCESS", providerStatus, tracks: normalizeSunoTracks(body.data?.response?.sunoData ?? []) };
+  }
+  const failed = ["CREATE_TASK_FAILED", "GENERATE_AUDIO_FAILED", "CALLBACK_EXCEPTION", "SENSITIVE_WORD_ERROR"].includes(providerStatus);
+  if (failed) {
+    return { status: "FAILED", providerStatus, tracks: [], error: body.data?.errorMessage ?? providerStatus };
+  }
+  return { status: "PENDING", providerStatus, tracks: normalizeSunoTracks(body.data?.response?.sunoData ?? []) };
+}
+
 export async function generateMusic(env: Env, request: SongRequest, pkg: LyricsPackage): Promise<MusicResult> {
   const base = (env.PUBLIC_BASE_URL ?? "http://localhost:8787").replace(/\/$/, "");
   const testMode = env.TEST_MODE !== "false" || request.testOnly === true;
@@ -182,25 +244,14 @@ export async function generateMusic(env: Env, request: SongRequest, pkg: LyricsP
       provider: "mock",
       taskId: `mock-${Date.now()}`,
       tracks: [
-        {
-          id: "mock-a",
-          audioUrl: `${base}/api/test/audio.wav`,
-          imageUrl: `${base}/api/test/cover.svg`,
-          durationSeconds: 2,
-          title: pkg.title
-        },
-        {
-          id: "mock-b",
-          audioUrl: `${base}/api/test/audio.wav`,
-          imageUrl: `${base}/api/test/cover.svg`,
-          durationSeconds: 2,
-          title: `${pkg.title} (B)`
-        }
+        { id: "mock-a", audioUrl: `${base}/api/test/audio.wav`, imageUrl: `${base}/api/test/cover.svg`, durationSeconds: 2, title: pkg.title },
+        { id: "mock-b", audioUrl: `${base}/api/test/audio.wav`, imageUrl: `${base}/api/test/cover.svg`, durationSeconds: 2, title: `${pkg.title} (B)` }
       ]
     };
   }
 
   if (!env.SUNO_API_KEY) throw new Error("SUNO_API_KEY is required for paid music generation");
+  if (!env.SUNO_CALLBACK_SECRET) throw new Error("SUNO_CALLBACK_SECRET is required for live music generation");
   if (!env.PUBLIC_BASE_URL?.startsWith("https://")) {
     throw new Error("PUBLIC_BASE_URL must be an HTTPS deployment before live Suno generation so callbacks can be received");
   }
@@ -208,6 +259,8 @@ export async function generateMusic(env: Env, request: SongRequest, pkg: LyricsP
   const minimum = Math.max(1, Number(env.MIN_SUNO_CREDITS ?? "1"));
   if (creditsBefore < minimum) throw new Error(`BUDGET_BLOCKED: Suno balance ${creditsBefore} is below minimum ${minimum}`);
 
+  const callbackUrl = new URL(`${base}/api/callbacks/suno`);
+  callbackUrl.searchParams.set("token", env.SUNO_CALLBACK_SECRET);
   const response = await fetch(`${env.SUNO_BASE_URL ?? "https://api.sunoapi.org/api/v1"}/generate`, {
     method: "POST",
     headers: {
@@ -218,7 +271,7 @@ export async function generateMusic(env: Env, request: SongRequest, pkg: LyricsP
       customMode: true,
       instrumental: request.instrumental ?? false,
       model: env.SUNO_MODEL ?? "V5",
-      callBackUrl: `${base}/api/callbacks/suno`,
+      callBackUrl: callbackUrl.toString(),
       prompt: request.instrumental ? undefined : pkg.lyrics.slice(0, 5000),
       style: pkg.stylePrompt.slice(0, 1000),
       title: pkg.title.slice(0, 100),
@@ -229,10 +282,5 @@ export async function generateMusic(env: Env, request: SongRequest, pkg: LyricsP
   if (!response.ok || body.code !== 200 || !body.data?.taskId) {
     throw new Error(`Suno generation failed: ${body.msg ?? `HTTP ${response.status}`}`);
   }
-  return {
-    provider: "sunoapi.org",
-    taskId: body.data.taskId,
-    tracks: [],
-    creditsBefore
-  };
+  return { provider: "sunoapi.org", taskId: body.data.taskId, tracks: [], creditsBefore };
 }

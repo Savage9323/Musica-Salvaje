@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       audio_url:
-        description: URL of the audio file (MP3)
+        description: URL of the audio file (MP3/WAV)
         required: true
       image_url:
         description: URL of the cover image (optional)
@@ -14,53 +14,58 @@ on:
         description: Output filename e.g. MS-20260822-1234.mp4
         required: true
 
+permissions:
+  contents: write
+
 jobs:
   render:
     runs-on: ubuntu-latest
     steps:
-      - name: Install FFmpeg
-        run: sudo apt-get install -y ffmpeg
+      - name: Ensure FFmpeg
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
 
       - name: Download audio
         run: |
-          curl -L --fail --max-time 120 "${{ inputs.audio_url }}" -o audio.mp3
-          SIZE=$(stat -c%s audio.mp3)
+          curl -L --fail --retry 3 --retry-delay 2 --max-time 180 "${{ inputs.audio_url }}" -o audio.input
+          SIZE=$(stat -c%s audio.input)
           echo "Audio size: $SIZE bytes"
           if [ "$SIZE" -lt 10000 ]; then
             echo "ERROR: Downloaded audio file is too small ($SIZE bytes) — likely an error page"
-            cat audio.mp3
             exit 1
           fi
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 audio.input
 
       - name: Download or create cover image
         run: |
           if [ -n "${{ inputs.image_url }}" ]; then
-            curl -L --fail --max-time 60 "${{ inputs.image_url }}" -o cover.jpg || \
-              ffmpeg -y -f lavfi -i color=c=black:size=1024x1024:rate=1 -frames:v 1 cover.jpg
-          else
-            ffmpeg -y -f lavfi -i color=c=black:size=1024x1024:rate=1 -frames:v 1 cover.jpg
+            curl -L --fail --retry 3 --retry-delay 2 --max-time 90 "${{ inputs.image_url }}" -o cover.input || true
           fi
-          SIZE=$(stat -c%s cover.jpg)
-          echo "Image size: $SIZE bytes"
-          if [ "$SIZE" -lt 1000 ]; then
-            echo "WARNING: Cover image very small ($SIZE bytes), regenerating black frame"
+          if [ ! -s cover.input ]; then
             ffmpeg -y -f lavfi -i color=c=black:size=1024x1024:rate=1 -frames:v 1 cover.jpg
+          else
+            ffmpeg -y -i cover.input -frames:v 1 -vf "scale=1024:1024:force_original_aspect_ratio=decrease,pad=1024:1024:(ow-iw)/2:(oh-ih)/2" cover.jpg
           fi
 
       - name: Render video
         run: |
-          ffmpeg -y -loop 1 -i cover.jpg -i audio.mp3 \
-            -c:v libx264 -tune stillimage -c:a aac -b:a 192k \
-            -pix_fmt yuv420p -shortest \
+          ffmpeg -y -loop 1 -i cover.jpg -i audio.input \
+            -c:v libx264 -preset medium -tune stillimage -c:a aac -b:a 192k \
+            -pix_fmt yuv420p -movflags +faststart -shortest \
             "${{ inputs.output_name }}"
+          test -s "${{ inputs.output_name }}"
+          ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "${{ inputs.output_name }}"
 
-      - name: Create release and upload
+      - name: Upsert release asset
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ inputs.output_name }}"
           TAG="${TAG%.mp4}"
-          gh release create "$TAG" "${{ inputs.output_name }}" \
-            --title "Render $TAG" \
-            --notes "Auto-rendered by Musica Salvaje" \
-            --repo "${{ github.repository }}"
+          if ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "Render $TAG" --notes "Auto-rendered by Música Salvaje" --repo "${{ github.repository }}"
+          fi
+          gh release upload "$TAG" "${{ inputs.output_name }}" --clobber --repo "${{ github.repository }}"

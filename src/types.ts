@@ -7,7 +7,13 @@ export type SongStatus =
   | "BUDGET_BLOCKED"
   | "MUSIC_GENERATING"
   | "AUDIO_READY"
-  | "MUSIC_FAILED";
+  | "MUSIC_FAILED"
+  | "RENDERING"
+  | "VIDEO_READY"
+  | "RENDER_FAILED"
+  | "READY_TO_PUBLISH"
+  | "PUBLISHED"
+  | "UPLOAD_FAILED";
 
 export interface SongRequest {
   idea: string;
@@ -57,6 +63,13 @@ export interface MusicResult {
   creditsAfter?: number;
 }
 
+export interface MusicTaskStatus {
+  status: "PENDING" | "SUCCESS" | "FAILED";
+  providerStatus: string;
+  tracks: MusicTrack[];
+  error?: string;
+}
+
 export interface SongRecord {
   catalogId: string;
   createdAt: string;
@@ -74,5 +87,15 @@ export interface SongRecord {
   audioUrls: string[];
   coverUrl: string | null;
   paidGeneration: boolean;
+  error: string | null;
+}
+
+export interface RenderRecord {
+  catalogId: string;
+  attempt: number;
+  status: "IDLE" | "DISPATCHED" | "RUNNING" | "SUCCESS" | "FAILED";
+  startedAt: string | null;
+  lastCheckedAt: string | null;
+  videoUrl: string | null;
   error: string | null;
 }

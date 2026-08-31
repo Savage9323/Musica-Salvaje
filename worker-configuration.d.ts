@@ -12,11 +12,17 @@ declare global {
     XAI_API_KEY?: string;
     XAI_MODEL?: string;
     SUNO_API_KEY?: string;
+    SUNO_CALLBACK_SECRET?: string;
     SUNO_BASE_URL?: string;
     SUNO_MODEL?: string;
     QUALITY_GATE?: string;
+    MAX_LYRIC_REVISIONS?: string;
     MAX_DAILY_PAID_GENERATIONS?: string;
     MIN_SUNO_CREDITS?: string;
+    GITHUB_TOKEN?: string;
+    GITHUB_REPO?: string;
+    GITHUB_RENDER_WORKFLOW?: string;
+    GITHUB_RENDER_REF?: string;
   }
 }
 
