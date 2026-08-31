@@ -1,6 +1,12 @@
 name: ACE-Step Free CPU Benchmark
 
 on:
+  # One initial 10-second feasibility run is intentionally triggered when this
+  # workflow first lands on main. After evidence is collected, remove this push
+  # trigger so all subsequent heavy benchmarks are manual-only.
+  push:
+    branches: [main]
+    paths: [".github/workflows/ace-step-benchmark.yml"]
   workflow_dispatch:
     inputs:
       duration_seconds:
@@ -31,6 +37,7 @@ jobs:
       ACE_STEP_SUPPRESS_AUDIO_TOKENS: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
       TOKENIZERS_PARALLELISM: "false"
+      BENCHMARK_DURATION: ${{ inputs.duration_seconds || '10' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -48,7 +55,7 @@ jobs:
             echo "- Started (UTC): $(date -u +%FT%TZ)"
             echo "- Runner: $RUNNER_NAME / $RUNNER_OS / $RUNNER_ARCH"
             echo "- Upstream commit: $ACESTEP_COMMIT"
-            echo "- Requested duration: ${{ inputs.duration_seconds }} seconds"
+            echo "- Requested duration: $BENCHMARK_DURATION seconds"
             echo "- GitHub run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo
             echo "## CPU"
@@ -181,7 +188,7 @@ jobs:
           use_cot_language = false
           batch_size = 1
           EOF
-          echo 'duration = ${{ inputs.duration_seconds }}' >> ace-step/benchmark.toml
+          echo "duration = $BENCHMARK_DURATION" >> ace-step/benchmark.toml
           cat ace-step/benchmark.toml
 
       - name: Generate with ACE-Step on CPU
