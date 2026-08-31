@@ -7,6 +7,7 @@ declare global {
     ASSETS: Fetcher;
     MEDIA?: R2Bucket;
     TEST_MODE?: string;
+    ALLOW_UNAUTHENTICATED_TEST_API?: string;
     LIVE_GENERATION_ENABLED?: string;
     ADMIN_API_TOKEN?: string;
     LYRICS_PROVIDER?: "mock" | "groq" | "xai";

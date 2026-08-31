@@ -1,10 +1,11 @@
-# Start with free testing. Copy this file to .dev.vars.
+# Start with free local testing. Copy this file to .dev.vars.
 TEST_MODE=true
+ALLOW_UNAUTHENTICATED_TEST_API=true
 LIVE_GENERATION_ENABLED=false
 LYRICS_PROVIDER=mock
 PUBLIC_BASE_URL=http://localhost:8787
 
-# Optional admin auth. Required before live mode.
+# Deployed test/live instances fail closed without this secret.
 # Generate a long random value and store it only as a secret.
 # ADMIN_API_TOKEN=replace_me
 
@@ -20,6 +21,7 @@ PUBLIC_BASE_URL=http://localhost:8787
 
 # Paid music generation. Leave unset while testing.
 # TEST_MODE=false
+# ALLOW_UNAUTHENTICATED_TEST_API=false
 # LIVE_GENERATION_ENABLED=true
 # PUBLIC_BASE_URL=https://your-worker.workers.dev
 # SUNO_API_KEY=replace_me

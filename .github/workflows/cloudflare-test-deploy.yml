@@ -1,0 +1,126 @@
+name: Deploy Cloudflare Test Studio
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: musica-salvaje-cloudflare-test
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      ADMIN_API_TOKEN: ${{ secrets.MUSICA_SALVAJE_ADMIN_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Verify repository before deploy
+        run: npm run check
+
+      - name: Validate required deployment secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN"; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "Missing CLOUDFLARE_ACCOUNT_ID"; exit 1; }
+          test -n "$ADMIN_API_TOKEN" || { echo "Missing MUSICA_SALVAJE_ADMIN_API_TOKEN"; exit 1; }
+
+      - name: Ensure private R2 media bucket exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler r2 bucket list > /tmp/r2-buckets.txt
+          if grep -Fq "musica-salvaje-media" /tmp/r2-buckets.txt; then
+            echo "R2 bucket already exists."
+          else
+            npx wrangler r2 bucket create musica-salvaje-media
+          fi
+
+      - name: Build encrypted Worker secret file
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const value = process.env.ADMIN_API_TOKEN;
+          if (!value) throw new Error('ADMIN_API_TOKEN is empty');
+          fs.writeFileSync('/tmp/musica-salvaje-secrets.json', JSON.stringify({ ADMIN_API_TOKEN: value }));
+          NODE
+          chmod 600 /tmp/musica-salvaje-secrets.json
+
+      - name: Deploy locked test Worker and discover URL
+        id: first_deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --secrets-file /tmp/musica-salvaje-secrets.json 2>&1 | tee /tmp/wrangler-deploy.txt
+          WORKER_URL=$(grep -Eo 'https://[A-Za-z0-9.-]+\.workers\.dev' /tmp/wrangler-deploy.txt | tail -n 1)
+          test -n "$WORKER_URL" || { echo "Could not determine workers.dev URL"; exit 1; }
+          echo "worker_url=$WORKER_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Bind canonical public URL and redeploy
+        env:
+          WORKER_URL: ${{ steps.first_deploy.outputs.worker_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const config = JSON.parse(fs.readFileSync('wrangler.jsonc', 'utf8'));
+          config.vars.PUBLIC_BASE_URL = process.env.WORKER_URL;
+          fs.writeFileSync('wrangler.jsonc', JSON.stringify(config, null, 2) + '\n');
+          NODE
+          npx wrangler deploy --secrets-file /tmp/musica-salvaje-secrets.json
+
+      - name: Smoke test deployed locked studio
+        env:
+          WORKER_URL: ${{ steps.first_deploy.outputs.worker_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error "$WORKER_URL/health" > /tmp/health.json
+          node -e "const x=require('/tmp/health.json'); if(!x.ok || x.mode!=='test') process.exit(1)"
+
+          CODE=$(curl --silent --output /tmp/unauthorized.json --write-out '%{http_code}' "$WORKER_URL/api/budget")
+          test "$CODE" = "401"
+
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+            "$WORKER_URL/api/budget" > /tmp/budget.json
+          node -e "const x=require('/tmp/budget.json'); if(!x.ok || !x.budget.testMode || x.budget.paidGenerationsToday!==0) process.exit(1)"
+
+          curl --fail --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data '{"idea":"Prueba segura de despliegue para Música Salvaje sin usar proveedores pagados","testOnly":true}' \
+            "$WORKER_URL/api/songs" > /tmp/song.json
+          WORKER_URL="$WORKER_URL" node - <<'NODE'
+          const x = require('/tmp/song.json');
+          if (!x.ok || x.song.paidGeneration !== false || x.song.status !== 'AUDIO_READY') process.exit(1);
+          if (!x.song.audioUrls?.every((url) => url.startsWith(process.env.WORKER_URL))) process.exit(1);
+          NODE
+
+          AUDIO_URL=$(node -e "const x=require('/tmp/song.json'); process.stdout.write(x.song.audioUrls[0])")
+          curl --fail --silent --show-error "$AUDIO_URL" --output /tmp/test-audio.wav
+          test "$(stat -c%s /tmp/test-audio.wav)" -gt 10000
+
+          echo "Cloudflare test Studio passed locked deployment smoke checks at $WORKER_URL"
+
+      - name: Remove temporary secret material
+        if: always()
+        run: rm -f /tmp/musica-salvaje-secrets.json /tmp/r2-buckets.txt /tmp/wrangler-deploy.txt /tmp/health.json /tmp/budget.json /tmp/song.json /tmp/test-audio.wav /tmp/unauthorized.json

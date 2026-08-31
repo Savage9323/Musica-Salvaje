@@ -23,6 +23,7 @@ Studio UI
 
 ```text
 TEST_MODE=true
+ALLOW_UNAUTHENTICATED_TEST_API=false
 LIVE_GENERATION_ENABLED=false
 LYRICS_PROVIDER=mock
 MAX_DAILY_PAID_GENERATIONS=2
@@ -31,7 +32,7 @@ MAX_MONTHLY_PAID_GENERATIONS=0
 
 `MAX_MONTHLY_PAID_GENERATIONS=0` intentionally locks paid generation. Live mode cannot reserve a Suno attempt until both daily and monthly limits are explicit positive integers.
 
-When `TEST_MODE=false`, the Studio/API also requires `ADMIN_API_TOKEN`. Production catalog reads and control routes are private, and the direct `/agents/*` transport is disabled to prevent bypassing the gateway. The Studio keeps its admin token in `sessionStorage` only for the current browser tab.
+A deployed Worker also fails closed without `ADMIN_API_TOKEN`, including while `TEST_MODE=true`. Only local development should set `ALLOW_UNAUTHENTICATED_TEST_API=true`; `.dev.vars.example` does this explicitly. Production catalog reads and control routes are private, and direct `/agents/*` transport is disabled in production. The Studio keeps its admin token in `sessionStorage` only for the current browser tab.
 
 ## $0 validation
 
@@ -47,25 +48,50 @@ Development and CI do not require xAI, Suno or YouTube credentials. Coverage inc
 - synthetic FFmpeg rendering
 - duplicate/idempotency tests
 - daily/monthly budget ledger tests
-- production admin/privacy tests
+- deployed-test and production admin/privacy tests
 - explicit-approval publish tests
 - frontend JavaScript syntax validation
 
 Run locally:
 
 ```bash
+cp .dev.vars.example .dev.vars
 npm install
 npm run check
 npm run dev
 ```
 
-Create a $0 test song:
+Create a $0 local test song:
 
 ```bash
 curl -X POST http://localhost:8787/api/songs \
   -H 'Content-Type: application/json' \
   -d '{"idea":"Un padre deja su pueblo para trabajar y cumplir una promesa a su familia","testOnly":true}'
 ```
+
+## Cloudflare locked test deployment
+
+`.github/workflows/cloudflare-test-deploy.yml` is a **manual-only** deployment workflow. It never enables paid music. It:
+
+1. runs the full repository check;
+2. verifies Cloudflare credentials are present;
+3. creates `musica-salvaje-media` in R2 if needed;
+4. uploads `ADMIN_API_TOKEN` alongside the first Worker deployment;
+5. discovers the assigned `workers.dev` URL;
+6. redeploys with `PUBLIC_BASE_URL` set to that canonical URL;
+7. verifies unauthenticated API access is rejected;
+8. creates a mock song with admin auth and confirms paid-generation count remains zero;
+9. verifies the generated test audio is reachable.
+
+Required GitHub repository secrets for this locked test deployment:
+
+```text
+CLOUDFLARE_ACCOUNT_ID
+CLOUDFLARE_API_TOKEN
+MUSICA_SALVAJE_ADMIN_API_TOKEN
+```
+
+The Cloudflare API token should be scoped to this account and include Worker deployment access plus R2 storage write access. Do not place any of these values in the repository.
 
 ## Lyrics and QA
 
@@ -142,7 +168,7 @@ Guard/failure states include `QUALITY_REJECTED`, `BUDGET_BLOCKED`, `MUSIC_FAILED
 
 Gateway responses add `nosniff`, no-referrer, frame denial and a restrictive permissions policy. HTML receives a same-origin Content Security Policy. API responses are marked `no-store`.
 
-Suno callbacks do not use the Studio admin token; they use the separate `SUNO_CALLBACK_SECRET`. R2 media remains directly readable so GitHub Actions can render from it, but persistent caching is disabled.
+Suno callbacks do not use the Studio admin token; they use the separate `SUNO_CALLBACK_SECRET`. R2 media remains directly readable so GitHub Actions can render from it, but persistent caching is disabled. Synthetic mock audio/cover endpoints are public only while `TEST_MODE=true`; they cannot spend credits or expose catalog data.
 
 ## Live-production secrets
 
@@ -163,14 +189,15 @@ Use Cloudflare/provider secret stores.
 
 ## Owner-only launch steps
 
-The code and $0 CI can be completed without account access. The first real end-to-end deployment requires:
+The code and $0 CI can be completed without account access. The first permanent Cloudflare test deployment needs only the three GitHub Cloudflare/admin secrets listed above. Live music remains disabled after that deployment.
 
-- Cloudflare account authorization and the `musica-salvaje-media` R2 bucket
+A later real end-to-end song additionally requires:
+
 - xAI API credential
 - SunoAPI.org API credential/credits
 - GitHub credential usable by the deployed Worker for workflow dispatch and private draft assets
 - Google/YouTube OAuth credentials plus channel authorization
-- `ADMIN_API_TOKEN`
 - an explicit positive monthly generation limit
+- changing `TEST_MODE=false` and `LIVE_GENERATION_ENABLED=true` only after those secrets are installed and verified
 
 The first Suno production test should use daily/monthly limits of **1** so real credits consumed per generation can be measured before any increase.
