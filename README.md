@@ -1,112 +1,71 @@
-# Música Salvaje Agent v1
+# Música Salvaje Agent
 
-A no-n8n, cost-guarded music-production agent built on Cloudflare Agents. The default configuration is intentionally **$0 test mode**: no xAI call, no SunoAPI.org call, and no paid music generation.
+Música Salvaje is moving from the former n8n workflow into a custom Cloudflare Agents/Workers service with strict cost controls.
 
-## Current pipeline
+## Current branch capabilities
 
-`idea -> idempotency -> finished lyrics -> QA gate -> budget guard -> music provider -> catalog`
+- $0 mock mode for end-to-end agent testing
+- Groq free-tier adapter for no-Suno lyric tests
+- xAI/Grok adapter for production finished lyrics
+- automatic lyric revision before any paid music generation
+- hard quality gate (default 8/10 overall; every dimension >= 7)
+- request hashing/idempotency to prevent duplicate paid generations
+- daily paid-generation cap
+- SunoAPI.org credit preflight
+- authenticated Suno callback URL in live mode
+- durable callback-recovery polling via Cloudflare Agent schedules
+- two Suno result tracks normalized from one generation task
+- retry-safe GitHub Actions + FFmpeg rendering
+- release polling instead of a fixed 3-minute wait
+- downstream render retries never regenerate or recharge music
 
-Providers are swappable:
-
-- `mock` lyrics + `mock` music: fully local/free test path.
-- `groq` lyrics: free-tier live LLM test path; music remains mock while `TEST_MODE=true`.
-- `xai` lyrics: production Grok path; music still stays mock until `TEST_MODE=false`.
-- `sunoapi.org` music: only used when `TEST_MODE=false` and a key is configured.
-
-The catalog lives in the Agent's SQLite-backed Durable Object, avoiding a separate database for v1.
-
-## Free testing ladder
-
-### Level 0 — unit/integration tests ($0, no accounts)
+## Free test path
 
 ```bash
 npm install
 npm run check
-```
-
-Cloudflare's local Worker/Durable Object runtime is simulated with Miniflare/Vitest. No cloud deployment is required.
-
-### Level 1 — local studio UI ($0, no accounts)
-
-```bash
-cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
-Open the Wrangler URL. `TEST_MODE=true` and `LYRICS_PROVIDER=mock` are the safe defaults.
+Defaults are intentionally safe:
 
-### Level 2 — real LLM, no music spend ($0 target)
-
-Create a Groq free-tier API key and set:
-
-```dotenv
+```text
 TEST_MODE=true
-LYRICS_PROVIDER=groq
-GROQ_API_KEY=...
+LYRICS_PROVIDER=mock
+QUALITY_GATE=8
+MAX_LYRIC_REVISIONS=2
+MAX_DAILY_PAID_GENERATIONS=2
 ```
 
-The agent generates real finished lyrics and scores them, but still uses generated test audio. Suno is never called.
+POST a test song:
 
-### Level 3 — Grok lyrics, mock music (very low cost, zero Suno credits)
-
-```dotenv
-TEST_MODE=true
-LYRICS_PROVIDER=xai
-XAI_API_KEY=...
+```bash
+curl -X POST http://localhost:8787/api/songs \
+  -H 'Content-Type: application/json' \
+  -d '{"idea":"Un padre deja su pueblo para trabajar y cumplir una promesa a su familia","testOnly":true}'
 ```
 
-This validates the production lyric provider while keeping the expensive music stage disabled.
+This path uses generated WAV/SVG fixtures and spends no Suno or xAI credits.
 
-### Level 4 — live music generation
+## Live secrets required later
 
-Only after Levels 0–3 pass:
+Never commit these values. Store them with Cloudflare secrets/configuration:
 
-```dotenv
-TEST_MODE=false
-LYRICS_PROVIDER=xai
-XAI_API_KEY=...
-SUNO_API_KEY=...
-PUBLIC_BASE_URL=https://your-worker.example
+```text
+XAI_API_KEY
+SUNO_API_KEY
+SUNO_CALLBACK_SECRET
+GITHUB_TOKEN
 ```
 
-Live generation is blocked unless the quality gate passes, the daily generation cap has room, Suno has enough credits, and `PUBLIC_BASE_URL` is HTTPS for callbacks.
+Live mode additionally needs an HTTPS `PUBLIC_BASE_URL`. `SUNO_CALLBACK_SECRET` protects the callback route because the provider callback contract does not include a signed webhook mechanism.
 
-## Spend protection
+## Recovery behavior
 
-Defaults:
+Suno completion can arrive by callback. The agent also polls `record-info` with durable backoff so a lost callback does not strand a paid generation. After audio is ready, rendering is dispatched once and the agent polls for the GitHub release asset. A render failure can be retried independently without another Suno request.
 
-- `QUALITY_GATE=8`
-- every quality dimension must be >= 7
-- `MAX_DAILY_PAID_GENERATIONS=2`
-- `MIN_SUNO_CREDITS=1`
-- duplicate requests return the existing song instead of generating again
-- `TEST_MODE=true` by default
-- paid-generation count remains zero in test mode
+## Production progression
 
-## SunoAPI.org integration
+`REQUESTED -> LYRICS_GENERATING -> LYRICS_QA -> READY_FOR_MUSIC -> MUSIC_GENERATING -> AUDIO_READY -> RENDERING -> VIDEO_READY`
 
-The implementation uses only two endpoints for v1:
-
-- `GET /api/v1/generate/credit` before a paid request
-- `POST /api/v1/generate` in custom mode after lyrics pass QA
-
-A live request uses the finished lyrics as the `prompt`, preserving Grok as the lyric writer. The provider documents that a generation request returns two songs, so Música Salvaje does not issue a second paid request just to obtain a variation.
-
-## API
-
-- `GET /health`
-- `POST /api/songs` `{ "idea": "...", "testOnly": true }`
-- `GET /api/songs`
-- `GET /api/songs/:catalogId`
-- `GET /api/budget`
-- `GET /api/test/audio.wav` in test mode only
-- `GET /api/test/cover.svg` in test mode only
-- `POST /api/callbacks/suno`
-
-## Secrets
-
-Never commit `.dev.vars` or API keys. For production use `wrangler secret put` for `XAI_API_KEY`, `SUNO_API_KEY`, and any other credential.
-
-## Next production stages
-
-The existing `.github/workflows/ffmpeg.yml` remains the renderer. The next stage after cloud authentication is to wire `AUDIO_READY -> GitHub Actions render -> VIDEO_READY`, then private YouTube upload and explicit publish approval. Those stages must retry independently and must never trigger another Suno generation when rendering or publishing fails.
+Failure/guard states include `QUALITY_REJECTED`, `BUDGET_BLOCKED`, `MUSIC_FAILED`, and `RENDER_FAILED`.
