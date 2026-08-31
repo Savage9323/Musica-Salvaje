@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
-import gateway from "../src/gateway";
+import gateway, { isReservationStale } from "../src/gateway";
 
 const testEnv = env as unknown as Env;
 function withEnv(values: Partial<Env>): Env {
@@ -18,6 +18,8 @@ describe("live-spend gateway", () => {
     const body = await response.json() as { song: { paidGeneration: boolean; status: string } };
     expect(body.song.paidGeneration).toBe(false);
     expect(body.song.status).toBe("AUDIO_READY");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
   it("fails closed on a live request while the live switch is disabled", async () => {
@@ -29,6 +31,13 @@ describe("live-spend gateway", () => {
     expect(response.status).toBe(423);
     const body = await response.json() as { error: string };
     expect(body.error).toContain("Live generation is locked");
+  });
+
+  it("recognizes abandoned budget reservations after the safety TTL", () => {
+    const now = Date.parse("2026-08-31T22:00:00.000Z");
+    expect(isReservationStale({ createdAt: "2026-08-31T21:29:59.000Z" }, now)).toBe(true);
+    expect(isReservationStale({ createdAt: "2026-08-31T21:45:00.000Z" }, now)).toBe(false);
+    expect(isReservationStale({ createdAt: "invalid" }, now)).toBe(true);
   });
 
   it("serializes reservations and enforces daily/monthly caps", async () => {

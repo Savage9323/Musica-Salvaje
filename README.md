@@ -6,21 +6,20 @@ Custom autonomous music-production agent replacing the former n8n workflow.
 
 ```text
 Studio UI
-  -> live-spend gateway
+  -> authenticated live-spend gateway
   -> Cloudflare Agent / Durable Object catalog
   -> Grok/xAI finished lyrics + automatic QA/revision
   -> SunoAPI.org Custom Mode (only intended paid music step)
-  -> R2 archival
-  -> GitHub Actions + FFmpeg render
+  -> R2 audio/cover archival
+  -> GitHub Actions + FFmpeg
+  -> private GitHub draft render asset
   -> deterministic SEO metadata
   -> private YouTube upload
-  -> explicit approval
+  -> explicit human approval
   -> public YouTube publish
 ```
 
-## Cost-first behavior
-
-The repository is safe by default:
+## Safe defaults
 
 ```text
 TEST_MODE=true
@@ -30,29 +29,27 @@ MAX_DAILY_PAID_GENERATIONS=2
 MAX_MONTHLY_PAID_GENERATIONS=0
 ```
 
-`MAX_MONTHLY_PAID_GENERATIONS=0` intentionally locks live generation. Production cannot reserve a paid-generation attempt until both daily and monthly limits are explicit positive integers.
+`MAX_MONTHLY_PAID_GENERATIONS=0` intentionally locks paid generation. Live mode cannot reserve a Suno attempt until both daily and monthly limits are explicit positive integers.
 
-The gateway also requires `ADMIN_API_TOKEN` when `TEST_MODE=false`. This prevents a public Worker endpoint from being used by strangers to spend Suno credits.
+When `TEST_MODE=false`, the Studio/API also requires `ADMIN_API_TOKEN`. Production catalog reads and control routes are private, and the direct `/agents/*` transport is disabled to prevent bypassing the gateway. The Studio keeps its admin token in `sessionStorage` only for the current browser tab.
 
-## $0 test coverage
+## $0 validation
 
-The project can be developed and validated without xAI, Suno or YouTube credentials:
+Development and CI do not require xAI, Suno or YouTube credentials. Coverage includes:
 
-- mock finished lyrics
-- automatic mock quality scores
-- two mock music candidates
-- generated WAV fixture
-- generated SVG cover
-- local Durable Object SQLite
-- local R2 simulation
-- deterministic SEO metadata
-- mocked Grok structured-output/revision HTTP contract
-- mocked Suno credit, generation and record-info contracts
-- mocked YouTube OAuth and resumable private upload
-- synthetic GitHub Actions FFmpeg rendering
+- mock finished lyrics, quality scores and two audio candidates
+- generated WAV and SVG fixtures
+- local Durable Object SQLite and R2 simulation
+- schema-constrained Grok revision contract
+- Suno credit/generation/record-info contracts using mocked HTTP
+- YouTube OAuth/resumable private-upload contract using mocked HTTP
+- authenticated private GitHub render-asset handoff using mocked HTTP
+- synthetic FFmpeg rendering
 - duplicate/idempotency tests
-- daily/monthly budget-ledger tests
+- daily/monthly budget ledger tests
+- production admin/privacy tests
 - explicit-approval publish tests
+- frontend JavaScript syntax validation
 
 Run locally:
 
@@ -62,7 +59,7 @@ npm run check
 npm run dev
 ```
 
-Then create a free test song:
+Create a $0 test song:
 
 ```bash
 curl -X POST http://localhost:8787/api/songs \
@@ -70,11 +67,11 @@ curl -X POST http://localhost:8787/api/songs \
   -d '{"idea":"Un padre deja su pueblo para trabajar y cumplir una promesa a su familia","testOnly":true}'
 ```
 
-## Finished lyric generation
+## Lyrics and QA
 
-Production lyrics use xAI/Grok. Groq can be used as an optional no-Suno test provider.
+Production lyrics use xAI/Grok. Groq can be selected for alternative testing.
 
-The lyric engine uses schema-constrained JSON, scores ten quality dimensions, and automatically rewrites a finished song up to the configured revision limit before any music-generation call is allowed.
+Before music generation, the lyric engine uses schema-constrained JSON, scores ten dimensions and rewrites the finished song up to the configured revision limit.
 
 Default gate:
 
@@ -85,30 +82,30 @@ Default gate:
 
 ## Suno cost protection
 
-Before a live SunoAPI.org request the system:
+Before one live SunoAPI.org Custom Mode request, the system:
 
-1. validates the request and idempotency hash;
-2. finishes lyric generation;
-3. runs the hard quality gate and automatic revisions;
-4. checks the live-generation switch;
-5. authenticates the admin request;
+1. validates and deduplicates the request;
+2. completes lyric generation and automatic revisions;
+3. passes the hard quality gate;
+4. authenticates the admin request;
+5. verifies `LIVE_GENERATION_ENABLED=true`;
 6. reserves a serialized daily/monthly budget slot;
 7. checks Suno credits;
-8. sends one Custom Mode generation request.
+8. submits one music-generation request.
 
-The generation task is recovered through both callback handling and `record-info` polling. Downstream failures never intentionally trigger another music generation.
+Reservations expire automatically after 30 minutes if a crashed request leaves one behind. Callback handling and `record-info` polling recover asynchronous Suno jobs. Render, archival and publishing failures never intentionally regenerate paid music.
 
 ## Media retention and rendering
 
-Live audio/cover URLs can be copied into Cloudflare R2 under the `MEDIA` binding before rendering. This avoids depending on temporary provider URLs.
+Suno audio and cover art are copied into Cloudflare R2 before rendering when the `MEDIA` binding is configured. Archived media responses use `private, no-store` rather than persistent public caching.
 
-Rendering uses `.github/workflows/ffmpeg.yml`. The workflow validates source media, renders H.264/AAC with `faststart`, and upserts the catalog-ID release asset with `--clobber`, so a render retry is idempotent.
+`.github/workflows/ffmpeg.yml` validates source media and renders H.264/AAC with `faststart`. The resulting MP4 is stored in a **GitHub draft release**, not a published release. Draft releases are discovered by the Worker using its authenticated GitHub token, and YouTube downloads the draft asset through the authenticated GitHub REST asset endpoint.
 
-The Agent polls the GitHub release instead of using a fixed sleep.
+This means a rendered song is not exposed as a public GitHub Release before approval. Render retries recreate the same private draft staging release and never regenerate music.
 
 ## YouTube publishing
 
-Once video is ready, the Agent prepares SEO metadata without another model call. If YouTube credentials are configured, it uses a resumable upload with:
+After rendering, deterministic SEO metadata is generated without another model call. When YouTube credentials are configured, the agent uses resumable upload with:
 
 - privacy: private
 - category: Music (10)
@@ -116,7 +113,13 @@ Once video is ready, the Agent prepares SEO metadata without another model call.
 - synthetic-media disclosure enabled by default
 - subscriber notification disabled during upload
 
-Public publishing is a separate action and requires an explicit `approved: true` request.
+Public publishing is a separate action requiring `approved: true`. The Studio also presents a second confirmation before sending that request.
+
+The Studio can recover downstream failures independently:
+
+- `RENDER_FAILED` -> retry FFmpeg only
+- private YouTube upload failed -> retry using the existing rendered MP4
+- `PRIVATE_READY` -> explicit approve and publish
 
 ## Runtime states
 
@@ -133,9 +136,15 @@ REQUESTED
 -> PUBLISHED
 ```
 
-Guard/failure states include `QUALITY_REJECTED`, `BUDGET_BLOCKED`, `MUSIC_FAILED`, `RENDER_FAILED`, and `UPLOAD_FAILED`.
+Guard/failure states include `QUALITY_REJECTED`, `BUDGET_BLOCKED`, `MUSIC_FAILED`, `RENDER_FAILED`, and upload failure states.
 
-## Secrets required only for live production
+## Browser and API hardening
+
+Gateway responses add `nosniff`, no-referrer, frame denial and a restrictive permissions policy. HTML receives a same-origin Content Security Policy. API responses are marked `no-store`.
+
+Suno callbacks do not use the Studio admin token; they use the separate `SUNO_CALLBACK_SECRET`. R2 media remains directly readable so GitHub Actions can render from it, but persistent caching is disabled.
+
+## Live-production secrets
 
 Never commit these values:
 
@@ -150,17 +159,18 @@ YOUTUBE_CLIENT_SECRET
 YOUTUBE_REFRESH_TOKEN
 ```
 
-Use Cloudflare secrets / provider secret stores in production.
+Use Cloudflare/provider secret stores.
 
-## Owner-only launch steps not required for $0 CI
+## Owner-only launch steps
 
-Before the first real end-to-end song, the project will need:
+The code and $0 CI can be completed without account access. The first real end-to-end deployment requires:
 
 - Cloudflare account authorization and the `musica-salvaje-media` R2 bucket
 - xAI API credential
 - SunoAPI.org API credential/credits
-- GitHub credential usable by the deployed Worker for workflow dispatch
-- Google/YouTube OAuth credentials and channel authorization
-- an explicit monthly paid-generation limit
+- GitHub credential usable by the deployed Worker for workflow dispatch and private draft assets
+- Google/YouTube OAuth credentials plus channel authorization
+- `ADMIN_API_TOKEN`
+- an explicit positive monthly generation limit
 
-The first live Suno test should remain capped to one reserved generation attempt so actual credits-per-request can be measured before raising limits.
+The first Suno production test should use daily/monthly limits of **1** so real credits consumed per generation can be measured before any increase.

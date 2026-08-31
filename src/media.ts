@@ -63,6 +63,7 @@ export async function serveArchivedMedia(bucket: R2Bucket, encodedKey: string): 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set("etag", object.httpEtag);
-  headers.set("cache-control", "public, max-age=31536000, immutable");
+  headers.set("cache-control", "private, no-store");
+  headers.set("x-content-type-options", "nosniff");
   return new Response(object.body, { headers });
 }
