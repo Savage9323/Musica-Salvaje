@@ -1,6 +1,33 @@
 import type { LyricsPackage, MusicResult, MusicTaskStatus, MusicTrack, QualityScores, SongRequest } from "./types";
 
 const ARTIST_NAMES = ["grupo firme", "lalo mora", "chalino sánchez", "chalino sanchez", "banda ms", "christian nodal", "bad bunny", "peso pluma"];
+const QUALITY_FIELDS = ["originality", "storytelling", "natural_spanish", "emotional_impact", "singability", "chorus_strength", "rhyme_quality", "regional_authenticity", "style_match", "commercial_potential"] as const;
+const LYRIC_RESPONSE_FORMAT = {
+  type: "json_schema",
+  json_schema: {
+    name: "musica_salvaje_finished_song",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        title: { type: "string" },
+        lyrics: { type: "string" },
+        stylePrompt: { type: "string" },
+        negativeStyles: { type: "array", items: { type: "string" } },
+        qualityScores: {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries(QUALITY_FIELDS.map((key) => [key, { type: "number", minimum: 0, maximum: 10 }])),
+          required: [...QUALITY_FIELDS]
+        },
+        overallScore: { type: "number", minimum: 0, maximum: 10 },
+        revisionCount: { type: "integer", minimum: 0, maximum: 4 }
+      },
+      required: ["title", "lyrics", "stylePrompt", "negativeStyles", "qualityScores", "overallScore", "revisionCount"]
+    }
+  }
+} as const;
 
 export async function sha256(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value.trim().toLowerCase());
@@ -44,7 +71,7 @@ export function mockLyrics(request: SongRequest): LyricsPackage {
 }
 
 function lyricSystemPrompt(): string {
-  return `You are the songwriting and quality-control engine for Música Salvaje. Create FINISHED original lyrics, not a draft. Do not imitate or name real recording artists. If the request references an artist, convert that reference into generic musical characteristics and omit the artist name. Use natural Spanish unless English is explicitly requested. Use section labels [Intro], [Verse 1], [Pre-Chorus], [Chorus], [Verse 2], [Bridge], [Final Chorus], [Outro]. Return JSON only with keys: title, lyrics, stylePrompt, negativeStyles, qualityScores, overallScore, revisionCount. qualityScores must include originality, storytelling, natural_spanish, emotional_impact, singability, chorus_strength, rhyme_quality, regional_authenticity, style_match, commercial_potential, each 0-10. Be strict and do not inflate scores. Aim for overallScore >= 8 and every dimension >= 7. stylePrompt must describe genre, subgenre, BPM, mood, energy, instruments, vocal type and dynamics without artist names.`;
+  return `You are the songwriting and quality-control engine for Música Salvaje. Create FINISHED original lyrics, not a draft. Do not imitate or name real recording artists. If the request references an artist, convert that reference into generic musical characteristics and omit the artist name. Use natural Spanish unless English is explicitly requested. Use section labels [Intro], [Verse 1], [Pre-Chorus], [Chorus], [Verse 2], [Bridge], [Final Chorus], [Outro]. Score the song strictly; do not inflate scores. Aim for overallScore >= 8 and every quality dimension >= 7. stylePrompt must describe genre, subgenre, BPM, mood, energy, instruments, vocal type and dynamics without artist names.`;
 }
 
 async function callOpenAICompatible(baseUrl: string, apiKey: string, model: string, request: SongRequest, previous?: LyricsPackage, revisionNumber = 0): Promise<LyricsPackage> {
@@ -57,7 +84,21 @@ async function callOpenAICompatible(baseUrl: string, apiKey: string, model: stri
     task: "Write the finished song and score it strictly before returning it.",
     request: { idea: request.idea, language: request.language ?? "es", genre: request.genre ?? "regional Mexican", mood: request.mood ?? [], instrumental: request.instrumental ?? false, targetDurationSeconds: 165 }
   };
-  const response = await fetch(`${baseUrl}/chat/completions`, { method: "POST", headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, temperature: 0.85, max_completion_tokens: 4096, messages: [{ role: "system", content: lyricSystemPrompt() }, { role: "user", content: JSON.stringify(userPayload) }] }) });
+  const isXai = baseUrl.includes("api.x.ai");
+  const headers: Record<string, string> = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
+  if (isXai) headers["x-grok-conv-id"] = (await sha256(`${request.idea}|${request.language ?? "es"}|${request.genre ?? "regional Mexican"}`)).slice(0, 32);
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model,
+      temperature: 0.85,
+      reasoning_effort: "low",
+      ...(isXai ? { max_tokens: 4096 } : { max_completion_tokens: 4096 }),
+      response_format: LYRIC_RESPONSE_FORMAT,
+      messages: [{ role: "system", content: lyricSystemPrompt() }, { role: "user", content: JSON.stringify(userPayload) }]
+    })
+  });
   if (!response.ok) throw new Error(`Lyrics provider HTTP ${response.status}: ${await response.text()}`);
   const body = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
   const content = body.choices?.[0]?.message?.content; if (!content) throw new Error("Lyrics provider returned no content");
