@@ -59,13 +59,21 @@ jobs:
           test -s "${{ inputs.output_name }}"
           ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "${{ inputs.output_name }}"
 
-      - name: Upsert release asset
+      - name: Store render in private draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ inputs.output_name }}"
           TAG="${TAG%.mp4}"
-          if ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "Render $TAG" --notes "Auto-rendered by Música Salvaje" --repo "${{ github.repository }}"
+          # Render assets must never become public before the YouTube approval step.
+          # Recreate the catalog release as a draft on every retry so a previous
+          # public/pre-release artifact cannot be reused accidentally.
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release delete "$TAG" --cleanup-tag --yes --repo "${{ github.repository }}"
           fi
+          gh release create "$TAG" \
+            --draft \
+            --title "Private render $TAG" \
+            --notes "Private staging render for Música Salvaje" \
+            --repo "${{ github.repository }}"
           gh release upload "$TAG" "${{ inputs.output_name }}" --clobber --repo "${{ github.repository }}"

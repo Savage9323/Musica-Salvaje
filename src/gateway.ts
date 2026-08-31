@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import coreWorker, { MusicaSalvajeAgent } from "./worker";
+import coreWorker, { MusicaSalvajeAgent as BaseMusicaSalvajeAgent } from "./worker";
 
 interface ReservationState {
   id: string;
@@ -10,6 +10,61 @@ interface ReservationState {
 
 function dayKey(now = new Date()): string { return now.toISOString().slice(0, 10); }
 function monthKey(now = new Date()): string { return now.toISOString().slice(0, 7); }
+
+export class MusicaSalvajeAgent extends BaseMusicaSalvajeAgent {
+  async pollRender(payload: { catalogId: string; attempt: number; poll: number }): Promise<void> {
+    const render = this.getRender(payload.catalogId);
+    if (!render || render.attempt !== payload.attempt || render.status === "SUCCESS") return;
+
+    const fail = (message: string) => {
+      const now = new Date().toISOString();
+      this.sql`UPDATE render_jobs SET status='FAILED',last_checked_at=${now},error=${message} WHERE catalog_id=${payload.catalogId}`;
+      this.sql`UPDATE songs SET status='RENDER_FAILED',updated_at=${now},error=${message} WHERE catalog_id=${payload.catalogId}`;
+    };
+
+    if (!this.env.GITHUB_TOKEN) {
+      fail("GITHUB_TOKEN is required to poll private draft render releases");
+      return;
+    }
+
+    const repo = this.env.GITHUB_REPO ?? "Savage9323/Musica-Salvaje";
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.env.GITHUB_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "musica-salvaje-agent"
+    };
+
+    try {
+      const response = await fetch(`https://api.github.com/repos/${repo}/releases?per_page=100`, { headers });
+      if (!response.ok) throw new Error(`GitHub draft release check HTTP ${response.status}: ${await response.text()}`);
+      const releases = await response.json() as Array<{
+        tag_name?: string;
+        draft?: boolean;
+        assets?: Array<{ name?: string; url?: string; browser_download_url?: string }>;
+      }>;
+      const release = releases.find((item) => item.tag_name === payload.catalogId && item.draft === true);
+      const asset = release?.assets?.find((item) => item.name?.toLowerCase().endsWith(".mp4") && item.url);
+      if (asset?.url) {
+        const now = new Date().toISOString();
+        this.sql`UPDATE render_jobs SET status='SUCCESS',last_checked_at=${now},video_url=${asset.url},error=NULL WHERE catalog_id=${payload.catalogId}`;
+        this.sql`UPDATE songs SET status='VIDEO_READY',updated_at=${now},error=NULL WHERE catalog_id=${payload.catalogId}`;
+        await this.preparePublishing(payload.catalogId, asset.url);
+        return;
+      }
+
+      if (payload.poll >= 15) {
+        fail("Private renderer polling timed out; retrying render never regenerates music");
+        return;
+      }
+      this.sql`UPDATE render_jobs SET status='RUNNING',last_checked_at=${new Date().toISOString()} WHERE catalog_id=${payload.catalogId}`;
+      await this.schedule(Math.min(180, 20 + payload.poll * 10), "pollRender", { ...payload, poll: payload.poll + 1 });
+    } catch (error) {
+      if (payload.poll >= 15) fail(error instanceof Error ? error.message : String(error));
+      else await this.schedule(Math.min(180, 30 + payload.poll * 10), "pollRender", { ...payload, poll: payload.poll + 1 });
+    }
+  }
+}
 
 export class BudgetGate extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
@@ -123,14 +178,10 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    // The Cloudflare Agents transport is useful in local/test mode, but must not
-    // provide a production bypass around the authenticated Studio/API gateway.
     if (url.pathname.startsWith("/agents/") && env.TEST_MODE === "false") {
       return Response.json({ ok: false, error: "Agent transport is disabled in production" }, { status: 404 });
     }
 
-    // In production, catalog/status/control APIs are private. Suno callbacks use
-    // their own callback secret and archived media remains readable for FFmpeg.
     if (isProtectedApi(request, url.pathname) && !isAdminAuthorized(request, env)) {
       return Response.json({ ok: false, error: "Admin authorization required" }, { status: 401 });
     }
@@ -149,5 +200,3 @@ export default {
     return coreWorker.fetch(request, env);
   }
 } satisfies ExportedHandler<Env>;
-
-export { MusicaSalvajeAgent };

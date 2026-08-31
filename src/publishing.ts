@@ -14,6 +14,7 @@ export interface YouTubeEnv {
   YOUTUBE_CLIENT_SECRET?: string;
   YOUTUBE_REFRESH_TOKEN?: string;
   YOUTUBE_CONTAINS_SYNTHETIC_MEDIA?: string;
+  GITHUB_TOKEN?: string;
 }
 
 export interface YouTubeUploadResult {
@@ -84,9 +85,22 @@ async function getAccessToken(env: YouTubeEnv): Promise<string> {
   return data.access_token;
 }
 
+function videoSourceHeaders(env: YouTubeEnv, videoUrl: string): Record<string, string> {
+  const url = new URL(videoUrl);
+  const isPrivateGithubAsset = url.hostname === "api.github.com" && /\/releases\/assets\/\d+$/.test(url.pathname);
+  if (!isPrivateGithubAsset) return {};
+  if (!env.GITHUB_TOKEN) throw new Error("GITHUB_TOKEN is required to download the private draft render asset");
+  return {
+    Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+    Accept: "application/octet-stream",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "musica-salvaje-agent"
+  };
+}
+
 export async function uploadYouTubePrivate(env: YouTubeEnv, videoUrl: string, metadata: SeoMetadata): Promise<YouTubeUploadResult> {
   const accessToken = await getAccessToken(env);
-  const source = await fetch(videoUrl, { redirect: "follow" });
+  const source = await fetch(videoUrl, { redirect: "follow", headers: videoSourceHeaders(env, videoUrl) });
   if (!source.ok || !source.body) throw new Error(`Video download failed HTTP ${source.status}`);
   const contentType = source.headers.get("content-type") ?? "video/mp4";
   const contentLength = source.headers.get("content-length");
