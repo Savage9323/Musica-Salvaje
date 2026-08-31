@@ -3,30 +3,67 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#090909" />
   <title>Música Salvaje Studio</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <main>
-    <p class="eyebrow">MÚSICA SALVAJE</p>
-    <h1>Automatic Music Studio</h1>
-    <p class="sub">Free test mode is enabled by default. It creates finished mock lyrics, two test audio candidates and catalog records without using Suno credits.</p>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Música Salvaje Studio home">
+      <span class="brand-mark">MS</span>
+      <span><strong>Música Salvaje</strong><small>Automatic Music Studio</small></span>
+    </a>
+    <div class="runtime">
+      <span id="modeBadge" class="badge">Checking mode…</span>
+      <span id="budgetBadge" class="badge muted">Budget…</span>
+    </div>
+  </header>
 
-    <section class="panel">
-      <label for="idea">Song idea</label>
-      <textarea id="idea" rows="6" placeholder="Quiero un corrido sobre..."></textarea>
-      <div class="row">
-        <button id="generate">Generate free test song</button>
-        <button id="refresh" class="secondary">Refresh catalog</button>
-      </div>
-      <pre id="status">Ready.</pre>
+  <main>
+    <section class="hero">
+      <p class="eyebrow">IDEA → LYRICS → MUSIC → VIDEO → YOUTUBE</p>
+      <h1>Turn a story into a finished song.</h1>
+      <p class="lede">Grok-ready lyric generation, quality gating, Suno cost protection, durable media storage, rendering, and review-first publishing from one studio.</p>
     </section>
 
-    <section>
-      <h2>Catalog</h2>
-      <div id="songs"></div>
+    <section class="composer" aria-labelledby="composerTitle">
+      <div class="section-heading">
+        <div><p class="eyebrow">CREATE</p><h2 id="composerTitle">New song</h2></div>
+        <button id="refresh" class="ghost" type="button">Refresh studio</button>
+      </div>
+
+      <label for="idea">Describe the song</label>
+      <textarea id="idea" rows="7" maxlength="4000" placeholder="Quiero un corrido sobre un padre que dejó Michoacán para trabajar y cumplir una promesa a sus hijos…"></textarea>
+      <div class="char-row"><span>Natural language is enough.</span><span id="charCount">0 / 4000</span></div>
+
+      <div class="controls">
+        <label>Language<select id="language"><option value="es">Spanish</option><option value="en">English</option></select></label>
+        <label>Genre<input id="genre" value="regional Mexican" /></label>
+        <label>Mood<input id="mood" placeholder="emotional, determined" /></label>
+        <label class="check"><input id="instrumental" type="checkbox" /><span>Instrumental</span></label>
+      </div>
+
+      <div class="generation-mode">
+        <div><strong>Generation mode</strong><p id="modeHelp">Free test mode uses mock music and spends $0.</p></div>
+        <label class="switch-row"><input id="liveGeneration" type="checkbox" /><span>Use live paid music generation</span></label>
+      </div>
+
+      <div class="actions">
+        <button id="generate" class="primary" type="button">Generate free test song</button>
+        <span id="activity" role="status" aria-live="polite">Ready.</span>
+      </div>
+    </section>
+
+    <section class="catalog" aria-labelledby="catalogTitle">
+      <div class="section-heading">
+        <div><p class="eyebrow">CATALOG</p><h2 id="catalogTitle">Studio sessions</h2></div>
+        <span id="songCount" class="counter">0 songs</span>
+      </div>
+      <div id="songs" class="song-grid"><div class="empty">Loading catalog…</div></div>
     </section>
   </main>
+
+  <template id="emptyTemplate"><div class="empty"><strong>No songs yet.</strong><span>Describe a story above and run a free test generation.</span></div></template>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
