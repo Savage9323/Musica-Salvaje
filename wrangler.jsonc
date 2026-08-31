@@ -25,6 +25,7 @@
   ],
   "vars": {
     "TEST_MODE": "true",
+    "ALLOW_UNAUTHENTICATED_TEST_API": "false",
     "LIVE_GENERATION_ENABLED": "false",
     "LYRICS_PROVIDER": "mock",
     "QUALITY_GATE": "8",

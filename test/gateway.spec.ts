@@ -2,13 +2,14 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import gateway, { isReservationStale } from "../src/gateway";
 
-const testEnv = env as unknown as Env;
+const workerEnv = env as unknown as Env;
 function withEnv(values: Partial<Env>): Env {
-  return Object.assign(Object.create(testEnv), values) as Env;
+  return Object.assign(Object.create(workerEnv), values) as Env;
 }
+const testEnv = withEnv({ ALLOW_UNAUTHENTICATED_TEST_API: "true" });
 
 describe("live-spend gateway", () => {
-  it("keeps free test generation available with zero secrets", async () => {
+  it("keeps explicitly local free test generation available with zero secrets", async () => {
     const response = await gateway.fetch(new Request("http://example.com/api/songs", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -22,12 +23,27 @@ describe("live-spend gateway", () => {
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
+  it("fails closed for a deployed-style test API without admin auth", async () => {
+    const lockedTest = withEnv({ TEST_MODE: "true", ALLOW_UNAUTHENTICATED_TEST_API: "false", ADMIN_API_TOKEN: undefined });
+    const response = await gateway.fetch(new Request("http://example.com/api/budget"), lockedTest);
+    expect(response.status).toBe(401);
+  });
+
+  it("keeps synthetic test media readable without an admin header", async () => {
+    const lockedTest = withEnv({ TEST_MODE: "true", ALLOW_UNAUTHENTICATED_TEST_API: "false", ADMIN_API_TOKEN: "secret" });
+    const response = await gateway.fetch(new Request("http://example.com/api/test/audio.wav"), lockedTest);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("audio/wav");
+  });
+
   it("fails closed on a live request while the live switch is disabled", async () => {
+    const token = "test-admin-token";
+    const lockedLive = withEnv({ TEST_MODE: "true", ALLOW_UNAUTHENTICATED_TEST_API: "false", ADMIN_API_TOKEN: token, LIVE_GENERATION_ENABLED: "false" });
     const response = await gateway.fetch(new Request("http://example.com/api/songs", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({ idea: "Una canción que nunca debe llegar a un proveedor pagado en esta prueba", testOnly: false })
-    }), testEnv);
+    }), lockedLive);
     expect(response.status).toBe(423);
     const body = await response.json() as { error: string };
     expect(body.error).toContain("Live generation is locked");

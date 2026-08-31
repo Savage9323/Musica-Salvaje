@@ -150,7 +150,8 @@ function secureEqual(a: string, b: string): boolean {
 }
 
 export function isAdminAuthorized(request: Request, env: Env): boolean {
-  if (env.TEST_MODE !== "false" && !env.ADMIN_API_TOKEN) return true;
+  const localTestAccess = env.TEST_MODE !== "false" && env.ALLOW_UNAUTHENTICATED_TEST_API === "true" && !env.ADMIN_API_TOKEN;
+  if (localTestAccess) return true;
   if (!env.ADMIN_API_TOKEN) return false;
   const header = request.headers.get("authorization") ?? "";
   return header.startsWith("Bearer ") && secureEqual(header.slice(7), env.ADMIN_API_TOKEN);
@@ -158,10 +159,13 @@ export function isAdminAuthorized(request: Request, env: Env): boolean {
 
 function isCallback(pathname: string): boolean { return pathname === "/api/callbacks/suno"; }
 function isPublicMedia(pathname: string): boolean { return pathname.startsWith("/api/media/"); }
-function isProtectedApi(request: Request, pathname: string): boolean {
+function isTestMedia(pathname: string, env: Env): boolean {
+  return env.TEST_MODE !== "false" && (pathname === "/api/test/audio.wav" || pathname === "/api/test/cover.svg");
+}
+function isProtectedApi(request: Request, pathname: string, env: Env): boolean {
   if (request.method === "OPTIONS") return false;
   if (!pathname.startsWith("/api/")) return false;
-  return !isCallback(pathname) && !isPublicMedia(pathname);
+  return !isCallback(pathname) && !isPublicMedia(pathname) && !isTestMedia(pathname, env);
 }
 
 function hardenResponse(request: Request, response: Response): Response {
@@ -224,7 +228,7 @@ export default {
       return finish(Response.json({ ok: false, error: "Agent transport is disabled in production" }, { status: 404 }));
     }
 
-    if (isProtectedApi(request, url.pathname) && !isAdminAuthorized(request, env)) {
+    if (isProtectedApi(request, url.pathname, env) && !isAdminAuthorized(request, env)) {
       return finish(Response.json({ ok: false, error: "Admin authorization required" }, { status: 401 }));
     }
 
