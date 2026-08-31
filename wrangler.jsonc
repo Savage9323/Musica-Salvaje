@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "musica-salvaje-agent",
-  "main": "src/server.ts",
+  "main": "src/worker.ts",
   "compatibility_date": "2026-08-31",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
@@ -12,17 +12,14 @@
   },
   "durable_objects": {
     "bindings": [
-      {
-        "name": "MusicaSalvajeAgent",
-        "class_name": "MusicaSalvajeAgent"
-      }
+      { "name": "MusicaSalvajeAgent", "class_name": "MusicaSalvajeAgent" }
     ]
   },
+  "r2_buckets": [
+    { "binding": "MEDIA", "bucket_name": "musica-salvaje-media" }
+  ],
   "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["MusicaSalvajeAgent"]
-    }
+    { "tag": "v1", "new_sqlite_classes": ["MusicaSalvajeAgent"] }
   ],
   "vars": {
     "TEST_MODE": "true",
@@ -37,6 +34,7 @@
     "XAI_MODEL": "grok-4.3",
     "GITHUB_REPO": "Savage9323/Musica-Salvaje",
     "GITHUB_RENDER_WORKFLOW": "ffmpeg.yml",
-    "GITHUB_RENDER_REF": "main"
+    "GITHUB_RENDER_REF": "main",
+    "YOUTUBE_CONTAINS_SYNTHETIC_MEDIA": "true"
   }
 }

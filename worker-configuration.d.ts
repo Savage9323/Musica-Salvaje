@@ -1,9 +1,10 @@
-import type { MusicaSalvajeAgent } from "./src/server";
+import type { MusicaSalvajeAgent } from "./src/worker";
 
 declare global {
   interface Env {
     MusicaSalvajeAgent: DurableObjectNamespace<MusicaSalvajeAgent>;
     ASSETS: Fetcher;
+    MEDIA?: R2Bucket;
     TEST_MODE?: string;
     LYRICS_PROVIDER?: "mock" | "groq" | "xai";
     PUBLIC_BASE_URL?: string;
@@ -23,6 +24,10 @@ declare global {
     GITHUB_REPO?: string;
     GITHUB_RENDER_WORKFLOW?: string;
     GITHUB_RENDER_REF?: string;
+    YOUTUBE_CLIENT_ID?: string;
+    YOUTUBE_CLIENT_SECRET?: string;
+    YOUTUBE_REFRESH_TOKEN?: string;
+    YOUTUBE_CONTAINS_SYNTHETIC_MEDIA?: string;
   }
 }
 
