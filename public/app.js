@@ -4,8 +4,13 @@ const generate = $("#generate");
 const activity = $("#activity");
 const songsNode = $("#songs");
 const liveToggle = $("#liveGeneration");
+const adminPanel = $("#adminPanel");
+const adminToken = $("#adminToken");
 let budget = null;
+let liveBudget = null;
 let busy = false;
+
+adminToken.value = sessionStorage.getItem("msAdminToken") || "";
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c]));
@@ -26,29 +31,64 @@ function statusClass(status) {
   return "";
 }
 function readableStatus(status) { return String(status || "UNKNOWN").replaceAll("_", " "); }
+function currentToken() { return adminToken.value.trim(); }
+function authorizedHeaders(source = {}) {
+  const headers = new Headers(source);
+  const token = currentToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return headers;
+}
 
-async function api(path, options) {
-  const response = await fetch(path, options);
+async function api(path, options = {}) {
+  const response = await fetch(path, { ...options, headers: authorizedHeaders(options.headers || {}) });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok || body.ok === false) throw new Error(body.error || `HTTP ${response.status}`);
+  if (!response.ok || body.ok === false) {
+    const message = response.status === 401 ? "Admin token required to unlock this production Studio." : (body.error || `HTTP ${response.status}`);
+    throw new Error(message);
+  }
   return body;
 }
 
 async function refreshBudget() {
-  const body = await api("/api/budget");
-  budget = body.budget;
-  const modeBadge = $("#modeBadge");
-  modeBadge.textContent = budget.testMode ? "$0 TEST MODE" : "LIVE MODE";
-  modeBadge.className = `badge ${budget.testMode ? "test" : "live"}`;
-  $("#budgetBadge").textContent = `${budget.paidGenerationsToday}/${budget.maxDailyPaidGenerations} paid generations today`;
-  liveToggle.disabled = budget.testMode;
-  if (budget.testMode) {
+  try {
+    const body = await api("/api/budget");
+    budget = body.budget;
+    const modeBadge = $("#modeBadge");
+    modeBadge.textContent = budget.testMode ? "$0 TEST MODE" : "LIVE MODE";
+    modeBadge.className = `badge ${budget.testMode ? "test" : "live"}`;
+    adminPanel.hidden = budget.testMode;
+
+    if (budget.testMode) {
+      liveBudget = null;
+      $("#budgetBadge").textContent = "$0 providers active";
+      liveToggle.disabled = true;
+      liveToggle.checked = false;
+      $("#modeHelp").textContent = "Backend is locked to free test providers. No Suno credits can be spent.";
+    } else {
+      const live = await api("/api/live-budget");
+      liveBudget = live;
+      const ledger = live.ledger || {};
+      $("#budgetBadge").textContent = `${ledger.dailyUsed ?? 0}/${live.maxDaily} today · ${ledger.monthlyUsed ?? 0}/${live.maxMonthly} month`;
+      liveToggle.disabled = !live.liveEnabled;
+      if (!live.liveEnabled) liveToggle.checked = false;
+      $("#modeHelp").textContent = live.liveEnabled
+        ? `Paid generation is unlocked behind the serialized budget gate. ${Math.max(0, live.maxDaily - (ledger.dailyUsed ?? 0) - (ledger.dailyReserved ?? 0))} daily slot(s) remain.`
+        : "Production backend is online, but paid generation remains locked by LIVE_GENERATION_ENABLED.";
+    }
+    updateGenerateLabel();
+  } catch (error) {
+    budget = null;
+    liveBudget = null;
+    adminPanel.hidden = false;
     liveToggle.checked = false;
-    $("#modeHelp").textContent = "Backend is locked to free test providers. No Suno credits can be spent.";
-  } else {
-    $("#modeHelp").textContent = `Live mode can spend Suno credits. ${budget.paidGenerationRemaining} paid generation(s) remain under today's cap.`;
+    liveToggle.disabled = true;
+    $("#modeBadge").textContent = "ADMIN REQUIRED";
+    $("#modeBadge").className = "badge live";
+    $("#budgetBadge").textContent = "Locked";
+    $("#modeHelp").textContent = error.message;
+    updateGenerateLabel();
+    throw error;
   }
-  updateGenerateLabel();
 }
 
 function renderSongs(list) {
@@ -93,24 +133,41 @@ async function refreshAll() {
 }
 
 function updateGenerateLabel() {
-  const live = liveToggle.checked && !budget?.testMode;
+  const live = liveToggle.checked && budget && !budget.testMode && liveBudget?.liveEnabled;
   generate.textContent = live ? "Generate live song" : "Generate free test song";
 }
 
 idea.addEventListener("input", () => { $("#charCount").textContent = `${idea.value.length} / 4000`; });
 liveToggle.addEventListener("change", updateGenerateLabel);
 $("#refresh").addEventListener("click", refreshAll);
+$("#unlock").addEventListener("click", async () => {
+  const token = currentToken();
+  if (!token) { activity.textContent = "Enter the admin token first."; adminToken.focus(); return; }
+  sessionStorage.setItem("msAdminToken", token);
+  activity.textContent = "Unlocking this browser tab…";
+  await refreshAll();
+  if (budget) activity.textContent = "Studio unlocked for this tab.";
+});
+$("#clearToken").addEventListener("click", async () => {
+  sessionStorage.removeItem("msAdminToken");
+  adminToken.value = "";
+  budget = null;
+  liveBudget = null;
+  activity.textContent = "Admin token cleared from this tab.";
+  await refreshAll();
+});
+adminToken.addEventListener("keydown", (event) => { if (event.key === "Enter") $("#unlock").click(); });
 
 generate.addEventListener("click", async () => {
   if (busy) return;
   const value = idea.value.trim();
   if (value.length < 12) { activity.textContent = "Add more detail to the song idea."; idea.focus(); return; }
-  const live = liveToggle.checked && !budget?.testMode;
-  if (live && !confirm("Live generation can spend SunoAPI credits. Continue with one generation request?")) {
+  const live = liveToggle.checked && budget && !budget.testMode && liveBudget?.liveEnabled;
+  if (live && !confirm("Live generation can spend SunoAPI credits. Continue with one budget-reserved generation request?")) {
     liveToggle.checked = false; updateGenerateLabel(); return;
   }
   busy = true; generate.disabled = true;
-  activity.textContent = live ? "Running free lyric QA before the paid music call…" : "Generating with $0 test providers…";
+  activity.textContent = live ? "Running lyric QA and budget checks before the paid music call…" : "Generating with $0 test providers…";
   try {
     const body = await api("/api/songs", {
       method: "POST",

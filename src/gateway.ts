@@ -77,9 +77,11 @@ export function isAdminAuthorized(request: Request, env: Env): boolean {
 }
 
 function isCallback(pathname: string): boolean { return pathname === "/api/callbacks/suno"; }
-function isMutation(request: Request, pathname: string): boolean {
-  if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") return false;
-  return pathname.startsWith("/api/") && !isCallback(pathname);
+function isPublicMedia(pathname: string): boolean { return pathname.startsWith("/api/media/"); }
+function isProtectedApi(request: Request, pathname: string): boolean {
+  if (request.method === "OPTIONS") return false;
+  if (!pathname.startsWith("/api/")) return false;
+  return !isCallback(pathname) && !isPublicMedia(pathname);
 }
 
 async function reserveBudget(env: Env): Promise<{ id: string } | Response> {
@@ -120,16 +122,26 @@ async function handleLiveSong(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    // The Cloudflare Agents transport is useful in local/test mode, but must not
+    // provide a production bypass around the authenticated Studio/API gateway.
+    if (url.pathname.startsWith("/agents/") && env.TEST_MODE === "false") {
+      return Response.json({ ok: false, error: "Agent transport is disabled in production" }, { status: 404 });
+    }
+
+    // In production, catalog/status/control APIs are private. Suno callbacks use
+    // their own callback secret and archived media remains readable for FFmpeg.
+    if (isProtectedApi(request, url.pathname) && !isAdminAuthorized(request, env)) {
+      return Response.json({ ok: false, error: "Admin authorization required" }, { status: 401 });
+    }
+
     if (url.pathname === "/api/live-budget" && request.method === "GET") {
-      if (!isAdminAuthorized(request, env)) return Response.json({ ok: false, error: "Admin authorization required" }, { status: 401 });
       const stub = env.BudgetGate.get(env.BudgetGate.idFromName("global"));
       const response = await stub.fetch("https://budget.local/status");
       const ledger = await response.json();
       return Response.json({ ok: true, liveEnabled: env.LIVE_GENERATION_ENABLED === "true", maxDaily: Number(env.MAX_DAILY_PAID_GENERATIONS ?? 0), maxMonthly: Number(env.MAX_MONTHLY_PAID_GENERATIONS ?? 0), ledger });
     }
-    if (isMutation(request, url.pathname) && !isAdminAuthorized(request, env)) {
-      return Response.json({ ok: false, error: "Admin authorization required" }, { status: 401 });
-    }
+
     if (url.pathname === "/api/songs" && request.method === "POST") {
       const body = await request.clone().json().catch(() => ({})) as { testOnly?: boolean };
       if (body.testOnly !== true) return handleLiveSong(request, env);

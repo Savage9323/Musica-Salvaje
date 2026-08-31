@@ -3,6 +3,9 @@ import { describe, expect, it } from "vitest";
 import gateway from "../src/gateway";
 
 const testEnv = env as unknown as Env;
+function withEnv(values: Partial<Env>): Env {
+  return Object.assign(Object.create(testEnv), values) as Env;
+}
 
 describe("live-spend gateway", () => {
   it("keeps free test generation available with zero secrets", async () => {
@@ -71,5 +74,33 @@ describe("live-spend gateway", () => {
     expect(ledger.monthlyUsed).toBe(1);
     expect(ledger.dailyReserved).toBe(0);
     expect(ledger.monthlyReserved).toBe(0);
+  });
+
+  it("keeps production catalog reads private", async () => {
+    const prod = withEnv({ TEST_MODE: "false", ADMIN_API_TOKEN: "correct-horse-battery-staple" });
+    const unauthorized = await gateway.fetch(new Request("http://example.com/api/songs"), prod);
+    expect(unauthorized.status).toBe(401);
+    const body = await unauthorized.json() as { error: string };
+    expect(body.error).toContain("Admin authorization");
+  });
+
+  it("accepts the admin bearer token for production status reads", async () => {
+    const token = "correct-horse-battery-staple";
+    const prod = withEnv({ TEST_MODE: "false", ADMIN_API_TOKEN: token });
+    const response = await gateway.fetch(new Request("http://example.com/api/budget", {
+      headers: { Authorization: `Bearer ${token}` }
+    }), prod);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { ok: boolean; budget: { testMode: boolean } };
+    expect(body.ok).toBe(true);
+    expect(body.budget.testMode).toBe(false);
+  });
+
+  it("disables the direct Agents transport in production", async () => {
+    const prod = withEnv({ TEST_MODE: "false", ADMIN_API_TOKEN: "secret" });
+    const response = await gateway.fetch(new Request("http://example.com/agents/MusicaSalvajeAgent/studio"), prod);
+    expect(response.status).toBe(404);
+    const body = await response.json() as { error: string };
+    expect(body.error).toContain("disabled in production");
   });
 });

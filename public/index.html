@@ -32,6 +32,18 @@
         <button id="refresh" class="ghost" type="button">Refresh studio</button>
       </div>
 
+      <div id="adminPanel" class="generation-mode">
+        <div>
+          <strong>Production Studio access</strong>
+          <p>The admin token is stored only in this browser tab and is never written to the repository or local storage.</p>
+        </div>
+        <div class="admin-actions">
+          <input id="adminToken" type="password" autocomplete="off" spellcheck="false" placeholder="Admin session token" aria-label="Admin session token" />
+          <button id="unlock" class="ghost" type="button">Unlock studio</button>
+          <button id="clearToken" class="ghost" type="button">Clear</button>
+        </div>
+      </div>
+
       <label for="idea">Describe the song</label>
       <textarea id="idea" rows="7" maxlength="4000" placeholder="Quiero un corrido sobre un padre que dejó Michoacán para trabajar y cumplir una promesa a sus hijos…"></textarea>
       <div class="char-row"><span>Natural language is enough.</span><span id="charCount">0 / 4000</span></div>
