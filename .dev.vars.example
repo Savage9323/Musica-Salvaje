@@ -1,0 +1,24 @@
+# Start with free testing. Copy this file to .dev.vars.
+TEST_MODE=true
+LYRICS_PROVIDER=mock
+PUBLIC_BASE_URL=http://localhost:8787
+
+# Free live-LLM test option (no Suno spend):
+# LYRICS_PROVIDER=groq
+# GROQ_API_KEY=replace_me
+# GROQ_MODEL=openai/gpt-oss-120b
+
+# Production lyrics provider requested for Musica Salvaje:
+# LYRICS_PROVIDER=xai
+# XAI_API_KEY=replace_me
+# XAI_MODEL=grok-4.3
+
+# Paid music generation. Leave unset while testing.
+# SUNO_API_KEY=replace_me
+# SUNO_BASE_URL=https://api.sunoapi.org/api/v1
+# SUNO_MODEL=V5
+
+# Guardrails
+QUALITY_GATE=8
+MAX_DAILY_PAID_GENERATIONS=2
+MIN_SUNO_CREDITS=1

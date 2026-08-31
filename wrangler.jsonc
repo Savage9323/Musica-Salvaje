@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "musica-salvaje-agent",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-08-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/agents/*"]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "MusicaSalvajeAgent",
+        "class_name": "MusicaSalvajeAgent"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["MusicaSalvajeAgent"]
+    }
+  ],
+  "vars": {
+    "TEST_MODE": "true",
+    "LYRICS_PROVIDER": "mock",
+    "QUALITY_GATE": "8",
+    "MAX_DAILY_PAID_GENERATIONS": "2",
+    "MIN_SUNO_CREDITS": "1",
+    "SUNO_BASE_URL": "https://api.sunoapi.org/api/v1",
+    "SUNO_MODEL": "V5",
+    "GROQ_MODEL": "openai/gpt-oss-120b",
+    "XAI_MODEL": "grok-4.3"
+  }
+}

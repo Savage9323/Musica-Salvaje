@@ -1,0 +1,22 @@
+:root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; background:#090909; color:#f5f1e9; }
+* { box-sizing:border-box; }
+body { margin:0; min-height:100vh; background:radial-gradient(circle at 20% 0%,#3a150d 0,transparent 38%),#090909; }
+main { width:min(980px,92vw); margin:0 auto; padding:64px 0 100px; }
+.eyebrow { letter-spacing:.22em; font-size:.8rem; opacity:.7; }
+h1 { font-size:clamp(2.5rem,7vw,5.8rem); line-height:.92; margin:.25rem 0 1rem; max-width:900px; }
+.sub { max-width:720px; line-height:1.6; color:#c9c0b5; }
+.panel,.song { border:1px solid #3a302a; background:rgba(18,15,13,.82); backdrop-filter:blur(10px); }
+.panel { margin:36px 0 56px; padding:24px; border-radius:18px; }
+label { display:block; margin-bottom:10px; font-weight:700; }
+textarea { width:100%; resize:vertical; border-radius:12px; border:1px solid #463830; background:#0d0b0a; color:#fff; padding:16px; font:inherit; }
+.row { display:flex; gap:12px; margin-top:14px; flex-wrap:wrap; }
+button { border:0; border-radius:999px; padding:12px 18px; font-weight:800; cursor:pointer; background:#f2c06b; color:#1a1008; }
+button.secondary { background:#28211d; color:#eee; }
+pre { white-space:pre-wrap; word-break:break-word; background:#050505; border-radius:10px; padding:14px; max-height:320px; overflow:auto; }
+#songs { display:grid; gap:14px; }
+.song { padding:18px; border-radius:14px; }
+.song > div { display:flex; justify-content:space-between; gap:12px; }
+.song span { font-size:.75rem; padding:5px 9px; background:#29211d; border-radius:999px; }
+.song small { color:#9f968e; }
+.song p { color:#d2c7bc; }
+audio { width:100%; margin-top:8px; }
