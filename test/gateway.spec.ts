@@ -36,17 +36,47 @@ describe("live-spend gateway", () => {
     expect(response.headers.get("content-type")).toContain("audio/wav");
   });
 
-  it("fails closed on a live request while the live switch is disabled", async () => {
+  it("fails closed on a paid live request while the live switch is disabled", async () => {
     const token = "test-admin-token";
-    const lockedLive = withEnv({ TEST_MODE: "true", ALLOW_UNAUTHENTICATED_TEST_API: "false", ADMIN_API_TOKEN: token, LIVE_GENERATION_ENABLED: "false" });
+    const lockedLive = withEnv({
+      TEST_MODE: "false",
+      ALLOW_UNAUTHENTICATED_TEST_API: "false",
+      ADMIN_API_TOKEN: token,
+      MUSIC_PROVIDER: "sunoapi.org",
+      LIVE_GENERATION_ENABLED: "false"
+    });
     const response = await gateway.fetch(new Request("http://example.com/api/songs", {
       method: "POST",
       headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ idea: "Una canción que nunca debe llegar a un proveedor pagado en esta prueba", testOnly: false })
+      body: JSON.stringify({ idea: "Una canción pagada que nunca debe pasar el interruptor de gasto", testOnly: false })
     }), lockedLive);
     expect(response.status).toBe(423);
     const body = await response.json() as { error: string };
     expect(body.error).toContain("Live generation is locked");
+  });
+
+  it("does not route a free ACE-Step request through the paid budget gate", async () => {
+    const token = "ace-step-admin-token";
+    const freeLive = withEnv({
+      TEST_MODE: "false",
+      ALLOW_UNAUTHENTICATED_TEST_API: "false",
+      ADMIN_API_TOKEN: token,
+      LYRICS_PROVIDER: "mock",
+      MUSIC_PROVIDER: "ace-step-github",
+      LIVE_GENERATION_ENABLED: "false",
+      MAX_DAILY_PAID_GENERATIONS: "0",
+      MAX_MONTHLY_PAID_GENERATIONS: "0"
+    });
+    const response = await gateway.fetch(new Request("http://example.com/api/songs", {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ idea: `Prueba ACE-Step gratuita sin reserva pagada ${crypto.randomUUID()}`, testOnly: false })
+    }), freeLive);
+    expect(response.status).toBe(201);
+    const body = await response.json() as { song: { status: string; paidGeneration: boolean; error: string | null } };
+    expect(body.song.status).toBe("MUSIC_FAILED");
+    expect(body.song.paidGeneration).toBe(false);
+    expect(body.song.error).toContain("FREE_PROVIDER_NOT_READY");
   });
 
   it("recognizes abandoned budget reservations after the safety TTL", () => {
