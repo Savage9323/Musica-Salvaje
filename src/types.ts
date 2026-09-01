@@ -22,6 +22,7 @@ export interface SongRequest {
   language?: "es" | "en";
   genre?: string;
   mood?: string[];
+  durationSeconds?: number;
 }
 
 export interface QualityScores {
