@@ -1,3 +1,4 @@
+import { getAceStepTaskStatus, stageAceStepTask } from "./ace-step-github";
 import type { LyricsPackage, MusicProviderId, MusicResult, MusicTaskStatus, MusicTrack, QualityScores, SongRequest } from "./types";
 
 const ARTIST_NAMES = ["grupo firme", "lalo mora", "chalino sánchez", "chalino sanchez", "banda ms", "christian nodal", "bad bunny", "peso pluma"];
@@ -75,14 +76,15 @@ function lyricSystemPrompt(): string {
 }
 
 async function callOpenAICompatible(baseUrl: string, apiKey: string, model: string, request: SongRequest, previous?: LyricsPackage, revisionNumber = 0): Promise<LyricsPackage> {
+  const targetDurationSeconds = Math.max(30, Math.min(360, Math.trunc(Number(request.durationSeconds ?? 165))));
   const userPayload = previous ? {
     task: "Revise the previous finished song. Fix every weak quality dimension, improve specificity and hook strength, preserve the core story, and return a complete replacement song. Do not explain your changes.",
     revisionNumber,
-    request: { idea: request.idea, language: request.language ?? "es", genre: request.genre ?? "regional Mexican", mood: request.mood ?? [], instrumental: request.instrumental ?? false, targetDurationSeconds: 165 },
+    request: { idea: request.idea, language: request.language ?? "es", genre: request.genre ?? "regional Mexican", mood: request.mood ?? [], instrumental: request.instrumental ?? false, targetDurationSeconds },
     previous
   } : {
     task: "Write the finished song and score it strictly before returning it.",
-    request: { idea: request.idea, language: request.language ?? "es", genre: request.genre ?? "regional Mexican", mood: request.mood ?? [], instrumental: request.instrumental ?? false, targetDurationSeconds: 165 }
+    request: { idea: request.idea, language: request.language ?? "es", genre: request.genre ?? "regional Mexican", mood: request.mood ?? [], instrumental: request.instrumental ?? false, targetDurationSeconds }
   };
   const isXai = baseUrl.includes("api.x.ai");
   const headers: Record<string, string> = { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" };
@@ -159,7 +161,7 @@ export async function getSunoTaskStatus(env: Env, taskId: string): Promise<Music
 
 export async function getMusicTaskStatus(env: Env, provider: MusicProviderId, taskId: string): Promise<MusicTaskStatus> {
   if (provider === "sunoapi.org") return getSunoTaskStatus(env, taskId);
-  if (provider === "ace-step-github") return { status: "FAILED", providerStatus: "NOT_ENABLED", tracks: [], error: "FREE_PROVIDER_NOT_READY: ACE-Step GitHub task polling is disabled until the benchmark gate passes" };
+  if (provider === "ace-step-github") return getAceStepTaskStatus(env, taskId);
   return { status: "FAILED", providerStatus: "INVALID_ASYNC_PROVIDER", tracks: [], error: `Provider ${provider} does not support asynchronous polling` };
 }
 
@@ -168,7 +170,7 @@ export async function generateMusic(env: Env, request: SongRequest, pkg: LyricsP
   if (testMode) return { provider: "mock", billing: "free", polling: "none", taskId: `mock-${Date.now()}`, tracks: [{ id: "mock-a", audioUrl: `${base}/api/test/audio.wav`, imageUrl: `${base}/api/test/cover.svg`, durationSeconds: 2, title: pkg.title }, { id: "mock-b", audioUrl: `${base}/api/test/audio.wav`, imageUrl: `${base}/api/test/cover.svg`, durationSeconds: 2, title: `${pkg.title} (B)` }] };
 
   const provider = configuredMusicProvider(env);
-  if (provider === "ace-step-github") throw new Error("FREE_PROVIDER_NOT_READY: ACE-Step GitHub generation is disabled until the benchmark gate passes");
+  if (provider === "ace-step-github") return stageAceStepTask(env, request, pkg);
 
   if (!env.SUNO_API_KEY) throw new Error("SUNO_API_KEY is required for paid music generation"); if (!env.SUNO_CALLBACK_SECRET) throw new Error("SUNO_CALLBACK_SECRET is required for live music generation");
   if (!env.PUBLIC_BASE_URL?.startsWith("https://")) throw new Error("PUBLIC_BASE_URL must be an HTTPS deployment before live Suno generation so callbacks can be received");
