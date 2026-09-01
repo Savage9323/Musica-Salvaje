@@ -30,6 +30,11 @@ declare global {
     GITHUB_REPO?: string;
     GITHUB_RENDER_WORKFLOW?: string;
     GITHUB_RENDER_REF?: string;
+    ACE_STEP_ENABLED?: string;
+    ACE_STEP_WORKFLOW?: string;
+    ACE_STEP_REF?: string;
+    ACE_STEP_DEFAULT_DURATION_SECONDS?: string;
+    ACE_STEP_MAX_DURATION_SECONDS?: string;
     YOUTUBE_CLIENT_ID?: string;
     YOUTUBE_CLIENT_SECRET?: string;
     YOUTUBE_REFRESH_TOKEN?: string;
