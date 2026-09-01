@@ -1,8 +1,8 @@
 import { Agent, getAgentByName, routeAgentRequest } from "agents";
 import { archiveTracks, serveArchivedMedia } from "./media";
 import { buildSeoMetadata, publishYouTubeVideo, uploadYouTubePrivate } from "./publishing";
-import { generateLyrics, generateMusic, getSunoTaskStatus, passesQuality, sha256 } from "./providers";
-import type { MusicTrack, RenderRecord, SongRecord, SongRequest, SongStatus } from "./types";
+import { generateLyrics, generateMusic, getMusicTaskStatus, musicRequestUsesPaidProvider, passesQuality, sha256 } from "./providers";
+import type { MusicProviderId, MusicTrack, RenderRecord, SongRecord, SongRequest, SongStatus } from "./types";
 
 interface SongRow {
   catalog_id: string; created_at: string; updated_at: string; request_hash: string; idea: string;
@@ -88,8 +88,7 @@ export class MusicaSalvajeAgent extends Agent<Env> {
       }
       this.sql`UPDATE songs SET status='READY_FOR_MUSIC',updated_at=${new Date().toISOString()},title=${lyricsResult.package.title},lyrics=${lyricsResult.package.lyrics},style_prompt=${lyricsResult.package.stylePrompt},quality_score=${lyricsResult.package.overallScore},lyrics_provider=${lyricsResult.provider},error=NULL WHERE catalog_id=${id}`;
 
-      const testMode = this.env.TEST_MODE !== "false" || request.testOnly === true;
-      if (!testMode) {
+      if (musicRequestUsesPaidProvider(this.env, request)) {
         const today = new Date().toISOString().slice(0,10) + "T00:00:00.000Z";
         const paidToday = this.sql<{count:number}>`SELECT COUNT(*) AS count FROM songs WHERE paid_generation=1 AND created_at>=${today}`[0]?.count ?? 0;
         const maxDaily = Math.max(0, Number(this.env.MAX_DAILY_PAID_GENERATIONS ?? "2"));
@@ -101,10 +100,15 @@ export class MusicaSalvajeAgent extends Agent<Env> {
 
       this.setStatus(id, "MUSIC_GENERATING");
       const music = await generateMusic(this.env, { ...request, idea }, lyricsResult.package);
-      const paid = music.provider === "sunoapi.org" ? 1 : 0;
+      const paid = music.billing === "paid" ? 1 : 0;
       this.sql`UPDATE songs SET updated_at=${new Date().toISOString()},music_provider=${music.provider},provider_task_id=${music.taskId},paid_generation=${paid} WHERE catalog_id=${id}`;
-      if (music.tracks.length) await this.completeAudio(id, music.tracks);
-      else await this.schedule(30, "pollSuno", { catalogId:id, taskId:music.taskId, attempt:0 }, { idempotent:true });
+      if (music.tracks.length) {
+        await this.completeAudio(id, music.tracks);
+      } else if (music.polling !== "none") {
+        await this.schedule(30, "pollMusic", { catalogId:id, provider:music.provider, taskId:music.taskId, attempt:0 }, { idempotent:true });
+      } else {
+        throw new Error(`Provider ${music.provider} returned no audio and no polling strategy`);
+      }
       return { duplicate:false, song:this.songOrThrow(id) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -126,7 +130,7 @@ export class MusicaSalvajeAgent extends Agent<Env> {
     const today = new Date().toISOString().slice(0,10)+"T00:00:00.000Z";
     const paid = this.sql<{count:number}>`SELECT COUNT(*) AS count FROM songs WHERE paid_generation=1 AND created_at>=${today}`[0]?.count ?? 0;
     const max = Math.max(0,Number(this.env.MAX_DAILY_PAID_GENERATIONS ?? "2"));
-    return { testMode:this.env.TEST_MODE !== "false", lyricsProvider:this.env.LYRICS_PROVIDER ?? "mock", paidGenerationsToday:paid, maxDailyPaidGenerations:max, paidGenerationRemaining:Math.max(0,max-paid) };
+    return { testMode:this.env.TEST_MODE !== "false", lyricsProvider:this.env.LYRICS_PROVIDER ?? "mock", musicProvider:this.env.MUSIC_PROVIDER ?? "sunoapi.org", paidGenerationsToday:paid, maxDailyPaidGenerations:max, paidGenerationRemaining:Math.max(0,max-paid) };
   }
 
   async handleSunoCallback(payload:unknown): Promise<SongRecord | null> {
@@ -145,18 +149,36 @@ export class MusicaSalvajeAgent extends Agent<Env> {
     return this.getSong(row.catalog_id);
   }
 
-  async pollSuno(payload:{catalogId:string;taskId:string;attempt:number}):Promise<void> {
-    const song=this.getSong(payload.catalogId); if(!song||song.status!=="MUSIC_GENERATING"||song.providerTaskId!==payload.taskId)return;
+  async pollMusic(payload:{catalogId:string;provider:MusicProviderId;taskId:string;attempt:number}):Promise<void> {
+    const song=this.getSong(payload.catalogId);
+    if(!song||song.status!=="MUSIC_GENERATING"||song.providerTaskId!==payload.taskId||song.musicProvider!==payload.provider)return;
     try {
-      const result=await getSunoTaskStatus(this.env,payload.taskId);
-      if(result.status==="SUCCESS"){ if(!result.tracks.length)throw new Error("Suno reported SUCCESS with no audio tracks"); await this.completeAudio(payload.catalogId,result.tracks); return; }
-      if(result.status==="FAILED"){ this.sql`UPDATE songs SET status='MUSIC_FAILED',updated_at=${new Date().toISOString()},error=${result.error??result.providerStatus} WHERE catalog_id=${payload.catalogId}`; return; }
-      if(payload.attempt>=11){ this.sql`UPDATE songs SET status='MUSIC_FAILED',updated_at=${new Date().toISOString()},error='Suno polling timed out; provider task remains recoverable manually' WHERE catalog_id=${payload.catalogId}`; return; }
-      await this.schedule(Math.min(300,30*Math.pow(2,Math.min(payload.attempt,3))),"pollSuno",{...payload,attempt:payload.attempt+1});
+      const result=await getMusicTaskStatus(this.env,payload.provider,payload.taskId);
+      if(result.status==="SUCCESS"){
+        if(!result.tracks.length)throw new Error(`${payload.provider} reported SUCCESS with no audio tracks`);
+        await this.completeAudio(payload.catalogId,result.tracks);
+        return;
+      }
+      if(result.status==="FAILED"){
+        this.sql`UPDATE songs SET status='MUSIC_FAILED',updated_at=${new Date().toISOString()},error=${result.error??result.providerStatus} WHERE catalog_id=${payload.catalogId}`;
+        return;
+      }
+      if(payload.attempt>=11){
+        this.sql`UPDATE songs SET status='MUSIC_FAILED',updated_at=${new Date().toISOString()},error=${`${payload.provider} polling timed out; provider task remains recoverable manually`} WHERE catalog_id=${payload.catalogId}`;
+        return;
+      }
+      await this.schedule(Math.min(300,30*Math.pow(2,Math.min(payload.attempt,3))),"pollMusic",{...payload,attempt:payload.attempt+1});
     } catch(error) {
-      if(payload.attempt>=11){ this.sql`UPDATE songs SET status='MUSIC_FAILED',updated_at=${new Date().toISOString()},error=${error instanceof Error?error.message:String(error)} WHERE catalog_id=${payload.catalogId}`; return; }
-      await this.schedule(Math.min(300,30*Math.pow(2,Math.min(payload.attempt,3))),"pollSuno",{...payload,attempt:payload.attempt+1});
+      if(payload.attempt>=11){
+        this.sql`UPDATE songs SET status='MUSIC_FAILED',updated_at=${new Date().toISOString()},error=${error instanceof Error?error.message:String(error)} WHERE catalog_id=${payload.catalogId}`;
+        return;
+      }
+      await this.schedule(Math.min(300,30*Math.pow(2,Math.min(payload.attempt,3))),"pollMusic",{...payload,attempt:payload.attempt+1});
     }
+  }
+
+  async pollSuno(payload:{catalogId:string;taskId:string;attempt:number}):Promise<void> {
+    return this.pollMusic({ ...payload, provider:"sunoapi.org" });
   }
 
   async persistMedia(payload:{catalogId:string;attempt:number}):Promise<void> {
