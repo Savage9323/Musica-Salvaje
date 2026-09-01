@@ -1,9 +1,9 @@
 name: ACE-Step Free CPU Benchmark
 
 on:
-  # One initial 10-second feasibility run is intentionally triggered when this
-  # workflow first lands on main. After evidence is collected, remove this push
-  # trigger so all subsequent heavy benchmarks are manual-only.
+  # The 10-second CPU run passed. One 30-second push-triggered run is now used
+  # to test duration-sensitive memory before enabling the real free provider.
+  # Remove this push trigger after the 30-second evidence is collected.
   push:
     branches: [main]
     paths: [".github/workflows/ace-step-benchmark.yml"]
@@ -12,7 +12,7 @@ on:
       duration_seconds:
         description: "Generated audio duration for the CPU feasibility test"
         required: true
-        default: "10"
+        default: "30"
         type: choice
         options:
           - "10"
@@ -37,7 +37,7 @@ jobs:
       ACE_STEP_SUPPRESS_AUDIO_TOKENS: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
       TOKENIZERS_PARALLELISM: "false"
-      BENCHMARK_DURATION: ${{ inputs.duration_seconds || '10' }}
+      BENCHMARK_DURATION: ${{ inputs.duration_seconds || '30' }}
     steps:
       - uses: actions/checkout@v4
 
