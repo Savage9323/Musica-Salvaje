@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampScore, mockLyrics, passesQuality, sha256 } from "../src/providers";
+import { clampScore, configuredMusicProvider, generateMusic, mockLyrics, musicRequestUsesPaidProvider, passesQuality, sha256 } from "../src/providers";
 
 describe("provider utilities", () => {
   it("hashes normalized input deterministically", async () => {
@@ -17,5 +17,31 @@ describe("provider utilities", () => {
     expect(pkg.lyrics).toContain("[Chorus]");
     expect(pkg.overallScore).toBeGreaterThanOrEqual(8);
     expect(passesQuality(pkg, 8)).toBe(true);
+  });
+
+  it("classifies paid provider usage before generation", () => {
+    const suno = { TEST_MODE: "false", MUSIC_PROVIDER: "sunoapi.org" } as Env;
+    const ace = { TEST_MODE: "false", MUSIC_PROVIDER: "ace-step-github" } as Env;
+    expect(configuredMusicProvider(suno)).toBe("sunoapi.org");
+    expect(configuredMusicProvider(ace)).toBe("ace-step-github");
+    expect(musicRequestUsesPaidProvider(suno, { testOnly: false })).toBe(true);
+    expect(musicRequestUsesPaidProvider(ace, { testOnly: false })).toBe(false);
+    expect(musicRequestUsesPaidProvider(suno, { testOnly: true })).toBe(false);
+  });
+
+  it("returns explicit free billing metadata for mock generation", async () => {
+    const request = { idea: "Una historia suficientemente detallada para probar el proveedor mock", testOnly: true };
+    const pkg = mockLyrics(request);
+    const result = await generateMusic({ TEST_MODE: "true", PUBLIC_BASE_URL: "http://localhost:8787" } as Env, request, pkg);
+    expect(result.provider).toBe("mock");
+    expect(result.billing).toBe("free");
+    expect(result.polling).toBe("none");
+  });
+
+  it("fails closed when ACE-Step is selected before its benchmark gate passes", async () => {
+    const request = { idea: "Una historia suficientemente detallada para probar ACE-Step", testOnly: false };
+    const pkg = mockLyrics(request);
+    await expect(generateMusic({ TEST_MODE: "false", MUSIC_PROVIDER: "ace-step-github" } as Env, request, pkg))
+      .rejects.toThrow("FREE_PROVIDER_NOT_READY");
   });
 });
