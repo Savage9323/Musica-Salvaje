@@ -11,6 +11,7 @@ declare global {
     LIVE_GENERATION_ENABLED?: string;
     ADMIN_API_TOKEN?: string;
     LYRICS_PROVIDER?: "mock" | "groq" | "xai";
+    MUSIC_PROVIDER?: "sunoapi.org" | "ace-step-github";
     PUBLIC_BASE_URL?: string;
     GROQ_API_KEY?: string;
     GROQ_MODEL?: string;

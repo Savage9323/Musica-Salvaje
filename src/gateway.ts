@@ -1,5 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import coreWorker, { MusicaSalvajeAgent as BaseMusicaSalvajeAgent } from "./worker";
+import { musicRequestUsesPaidProvider } from "./providers";
+import type { SongRequest } from "./types";
 
 interface ReservationState {
   id: string;
@@ -200,7 +202,7 @@ async function finishReservation(env: Env, id: string, action: "commit" | "relea
   await stub.fetch(`https://budget.local/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) });
 }
 
-async function handleLiveSong(request: Request, env: Env): Promise<Response> {
+async function handlePaidSong(request: Request, env: Env): Promise<Response> {
   if (!isAdminAuthorized(request, env)) return Response.json({ ok: false, error: "Admin authorization required" }, { status: 401 });
   const reservation = await reserveBudget(env);
   if (reservation instanceof Response) return reservation;
@@ -240,8 +242,8 @@ export default {
     }
 
     if (url.pathname === "/api/songs" && request.method === "POST") {
-      const body = await request.clone().json().catch(() => ({})) as { testOnly?: boolean };
-      if (body.testOnly !== true) return finish(await handleLiveSong(request, env));
+      const body = await request.clone().json().catch(() => ({})) as SongRequest;
+      if (musicRequestUsesPaidProvider(env, body)) return finish(await handlePaidSong(request, env));
     }
     return finish(await coreWorker.fetch(request, env));
   }

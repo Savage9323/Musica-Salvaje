@@ -1,4 +1,4 @@
-import type { LyricsPackage, MusicResult, MusicTaskStatus, MusicTrack, QualityScores, SongRequest } from "./types";
+import type { LyricsPackage, MusicProviderId, MusicResult, MusicTaskStatus, MusicTrack, QualityScores, SongRequest } from "./types";
 
 const ARTIST_NAMES = ["grupo firme", "lalo mora", "chalino sánchez", "chalino sanchez", "banda ms", "christian nodal", "bad bunny", "peso pluma"];
 const QUALITY_FIELDS = ["originality", "storytelling", "natural_spanish", "emotional_impact", "singability", "chorus_strength", "rhyme_quality", "regional_authenticity", "style_match", "commercial_potential"] as const;
@@ -123,6 +123,17 @@ export async function generateLyrics(env: Env, request: SongRequest): Promise<{ 
   return { provider, package: current };
 }
 
+export function configuredMusicProvider(env: Env): Exclude<MusicProviderId, "mock"> {
+  const provider = String(env.MUSIC_PROVIDER ?? "sunoapi.org");
+  if (provider === "sunoapi.org" || provider === "ace-step-github") return provider;
+  throw new Error(`Unsupported music provider: ${provider}`);
+}
+
+export function musicRequestUsesPaidProvider(env: Env, request: Pick<SongRequest, "testOnly">): boolean {
+  if (env.TEST_MODE !== "false" || request.testOnly === true) return false;
+  return configuredMusicProvider(env) === "sunoapi.org";
+}
+
 export async function getSunoCredits(env: Env): Promise<number> {
   if (!env.SUNO_API_KEY) throw new Error("SUNO_API_KEY is not configured");
   const response = await fetch(`${env.SUNO_BASE_URL ?? "https://api.sunoapi.org/api/v1"}/generate/credit`, { headers: { Authorization: `Bearer ${env.SUNO_API_KEY}` } });
@@ -146,14 +157,24 @@ export async function getSunoTaskStatus(env: Env, taskId: string): Promise<Music
   return { status: "PENDING", providerStatus, tracks: normalizeSunoTracks(body.data?.response?.sunoData ?? []) };
 }
 
+export async function getMusicTaskStatus(env: Env, provider: MusicProviderId, taskId: string): Promise<MusicTaskStatus> {
+  if (provider === "sunoapi.org") return getSunoTaskStatus(env, taskId);
+  if (provider === "ace-step-github") return { status: "FAILED", providerStatus: "NOT_ENABLED", tracks: [], error: "FREE_PROVIDER_NOT_READY: ACE-Step GitHub task polling is disabled until the benchmark gate passes" };
+  return { status: "FAILED", providerStatus: "INVALID_ASYNC_PROVIDER", tracks: [], error: `Provider ${provider} does not support asynchronous polling` };
+}
+
 export async function generateMusic(env: Env, request: SongRequest, pkg: LyricsPackage): Promise<MusicResult> {
   const base = (env.PUBLIC_BASE_URL ?? "http://localhost:8787").replace(/\/$/, ""); const testMode = env.TEST_MODE !== "false" || request.testOnly === true;
-  if (testMode) return { provider: "mock", taskId: `mock-${Date.now()}`, tracks: [{ id: "mock-a", audioUrl: `${base}/api/test/audio.wav`, imageUrl: `${base}/api/test/cover.svg`, durationSeconds: 2, title: pkg.title }, { id: "mock-b", audioUrl: `${base}/api/test/audio.wav`, imageUrl: `${base}/api/test/cover.svg`, durationSeconds: 2, title: `${pkg.title} (B)` }] };
+  if (testMode) return { provider: "mock", billing: "free", polling: "none", taskId: `mock-${Date.now()}`, tracks: [{ id: "mock-a", audioUrl: `${base}/api/test/audio.wav`, imageUrl: `${base}/api/test/cover.svg`, durationSeconds: 2, title: pkg.title }, { id: "mock-b", audioUrl: `${base}/api/test/audio.wav`, imageUrl: `${base}/api/test/cover.svg`, durationSeconds: 2, title: `${pkg.title} (B)` }] };
+
+  const provider = configuredMusicProvider(env);
+  if (provider === "ace-step-github") throw new Error("FREE_PROVIDER_NOT_READY: ACE-Step GitHub generation is disabled until the benchmark gate passes");
+
   if (!env.SUNO_API_KEY) throw new Error("SUNO_API_KEY is required for paid music generation"); if (!env.SUNO_CALLBACK_SECRET) throw new Error("SUNO_CALLBACK_SECRET is required for live music generation");
   if (!env.PUBLIC_BASE_URL?.startsWith("https://")) throw new Error("PUBLIC_BASE_URL must be an HTTPS deployment before live Suno generation so callbacks can be received");
   const creditsBefore = await getSunoCredits(env); const minimum = Math.max(1, Number(env.MIN_SUNO_CREDITS ?? "1")); if (creditsBefore < minimum) throw new Error(`BUDGET_BLOCKED: Suno balance ${creditsBefore} is below minimum ${minimum}`);
   const callbackUrl = new URL(`${base}/api/callbacks/suno`); callbackUrl.searchParams.set("token", env.SUNO_CALLBACK_SECRET);
   const response = await fetch(`${env.SUNO_BASE_URL ?? "https://api.sunoapi.org/api/v1"}/generate`, { method: "POST", headers: { Authorization: `Bearer ${env.SUNO_API_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify({ customMode: true, instrumental: request.instrumental ?? false, model: env.SUNO_MODEL ?? "V5", callBackUrl: callbackUrl.toString(), prompt: request.instrumental ? undefined : pkg.lyrics.slice(0, 5000), style: pkg.stylePrompt.slice(0, 1000), title: pkg.title.slice(0, 100), negativeTags: pkg.negativeStyles.join(", ").slice(0, 1000) }) });
   const body = (await response.json()) as { code?: number; msg?: string; data?: { taskId?: string } }; if (!response.ok || body.code !== 200 || !body.data?.taskId) throw new Error(`Suno generation failed: ${body.msg ?? `HTTP ${response.status}`}`);
-  return { provider: "sunoapi.org", taskId: body.data.taskId, tracks: [], creditsBefore };
+  return { provider: "sunoapi.org", billing: "paid", polling: "suno", taskId: body.data.taskId, tracks: [], creditsBefore };
 }

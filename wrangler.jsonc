@@ -28,6 +28,7 @@
     "ALLOW_UNAUTHENTICATED_TEST_API": "false",
     "LIVE_GENERATION_ENABLED": "false",
     "LYRICS_PROVIDER": "mock",
+    "MUSIC_PROVIDER": "sunoapi.org",
     "QUALITY_GATE": "8",
     "MAX_LYRIC_REVISIONS": "2",
     "MAX_DAILY_PAID_GENERATIONS": "2",

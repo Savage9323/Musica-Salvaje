@@ -3,6 +3,7 @@ TEST_MODE=true
 ALLOW_UNAUTHENTICATED_TEST_API=true
 LIVE_GENERATION_ENABLED=false
 LYRICS_PROVIDER=mock
+MUSIC_PROVIDER=sunoapi.org
 PUBLIC_BASE_URL=http://localhost:8787
 
 # Deployed test/live instances fail closed without this secret.
@@ -19,10 +20,16 @@ PUBLIC_BASE_URL=http://localhost:8787
 # XAI_API_KEY=replace_me
 # XAI_MODEL=grok-4.3
 
-# Paid music generation. Leave unset while testing.
+# Real music provider selection.
+# MUSIC_PROVIDER=sunoapi.org is the current supported live provider and is paid.
+# MUSIC_PROVIDER=ace-step-github is intentionally fail-closed until the free
+# ACE-Step benchmark/integration gate passes. It never falls back to Suno.
+
+# Paid Suno music generation. Leave live mode disabled while testing.
 # TEST_MODE=false
 # ALLOW_UNAUTHENTICATED_TEST_API=false
 # LIVE_GENERATION_ENABLED=true
+# MUSIC_PROVIDER=sunoapi.org
 # PUBLIC_BASE_URL=https://your-worker.workers.dev
 # SUNO_API_KEY=replace_me
 # SUNO_CALLBACK_SECRET=generate_a_long_random_secret
@@ -42,7 +49,7 @@ PUBLIC_BASE_URL=http://localhost:8787
 YOUTUBE_CONTAINS_SYNTHETIC_MEDIA=true
 
 # Guardrails.
-# Live mode fails closed unless DAILY and MONTHLY generation limits are positive.
+# Paid live mode fails closed unless DAILY and MONTHLY generation limits are positive.
 QUALITY_GATE=8
 MAX_LYRIC_REVISIONS=2
 MAX_DAILY_PAID_GENERATIONS=2
