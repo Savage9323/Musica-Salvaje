@@ -111,29 +111,38 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+
           path = Path("ace-step/pyproject.toml")
           text = path.read_text()
+
           replacements = {
               '"torch==2.10.0+cu128; sys_platform == \'linux\' and platform_machine == \'x86_64\'"': '"torch==2.10.0+cpu; sys_platform == \'linux\' and platform_machine == \'x86_64\'"',
               '"torchvision==0.25.0+cu128; sys_platform == \'linux\' and platform_machine == \'x86_64\'"': '"torchvision==0.25.0+cpu; sys_platform == \'linux\' and platform_machine == \'x86_64\'"',
               '"torchaudio==2.10.0+cu128; sys_platform == \'linux\' and platform_machine == \'x86_64\'"': '"torchaudio==2.10.0+cpu; sys_platform == \'linux\' and platform_machine == \'x86_64\'"',
-              'name = "pytorch-cu128"': 'name = "pytorch-cpu"',
-              'url = "https://download.pytorch.org/whl/cu128"': 'url = "https://download.pytorch.org/whl/cpu"',
-              '{ index = "pytorch-cu128", marker = "sys_platform == \'win32\' or (sys_platform == \'linux\' and platform_machine == \'x86_64\')" }': '{ index = "pytorch-cpu", marker = "sys_platform == \'linux\' and platform_machine == \'x86_64\'" }',
               '    "nano-vllm; sys_platform != \'darwin\' or platform_machine != \'arm64\'",\n': '',
           }
           for old, new in replacements.items():
               if old not in text:
                   raise SystemExit(f"Pinned upstream packaging changed; missing expected text: {old}")
               text = text.replace(old, new)
-          # Resolve only the environment used by this benchmark. This avoids pulling
-          # unrelated Windows/aarch64 CUDA packages into uv's cross-platform lock.
-          start = text.index("required-environments = [")
-          end = text.index("]", start) + 1
-          text = text[:start] + 'required-environments = [\n    "sys_platform == \'linux\' and platform_machine == \'x86_64\'",\n]' + text[end:]
+
+          # Preserve all upstream CUDA indexes for uv's universal resolver and add
+          # a CPU index only for this Linux x86_64 benchmark environment.
+          index_anchor = '[[tool.uv.index]]\nname = "pytorch-cu130"'
+          if index_anchor not in text:
+              raise SystemExit("Pinned upstream packaging changed; cu130 index anchor missing")
+          cpu_index = '[[tool.uv.index]]\nname = "pytorch-cpu"\nurl = "https://download.pytorch.org/whl/cpu"\nexplicit = true\n\n'
+          text = text.replace(index_anchor, cpu_index + index_anchor, 1)
+
+          shared_source = '{ index = "pytorch-cu128", marker = "sys_platform == \'win32\' or (sys_platform == \'linux\' and platform_machine == \'x86_64\')" }'
+          if text.count(shared_source) != 3:
+              raise SystemExit(f"Expected three shared cu128 source entries, found {text.count(shared_source)}")
+          split_source = '{ index = "pytorch-cu128", marker = "sys_platform == \'win32\'" },\n    { index = "pytorch-cpu", marker = "sys_platform == \'linux\' and platform_machine == \'x86_64\'" }'
+          text = text.replace(shared_source, split_source)
+
           path.write_text(text)
           PY
-          grep -nE 'torch==2.10.0|pytorch-cpu|required-environments' ace-step/pyproject.toml | head -20
+          grep -nE 'torch==2.10.0|pytorch-cpu|pytorch-cu128' ace-step/pyproject.toml | head -30
 
       - name: Install ACE-Step CPU environment
         id: install
@@ -141,7 +150,7 @@ jobs:
         run: |
           START=$(date +%s)
           set +e
-          (cd ace-step && uv sync --no-dev --python "$(command -v python)" --no-install-package nano-vllm) 2>&1 | tee benchmark/install.log
+          (cd ace-step && uv sync --no-dev --python "$(command -v python)") 2>&1 | tee benchmark/install.log
           STATUS=${PIPESTATUS[0]}
           set -e
           END=$(date +%s)
