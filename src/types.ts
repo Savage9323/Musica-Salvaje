@@ -55,8 +55,14 @@ export interface MusicTrack {
   title: string;
 }
 
+export type MusicProviderId = "mock" | "sunoapi.org" | "ace-step-github";
+export type MusicBillingClass = "free" | "paid";
+export type MusicPollingStrategy = "none" | "suno" | "github-draft";
+
 export interface MusicResult {
-  provider: "mock" | "sunoapi.org";
+  provider: MusicProviderId;
+  billing: MusicBillingClass;
+  polling: MusicPollingStrategy;
   taskId: string;
   tracks: MusicTrack[];
   creditsBefore?: number;
