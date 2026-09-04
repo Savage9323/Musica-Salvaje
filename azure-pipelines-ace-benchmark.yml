@@ -1,0 +1,52 @@
+# Manual ACE-Step CPU feasibility benchmark.
+# Uses the free self-hosted Azure Pipelines slot because the benchmark can exceed
+# the 60-minute cap of a free Microsoft-hosted private-project job.
+trigger: none
+pr: none
+
+parameters:
+  - name: durationSeconds
+    displayName: Generated audio duration
+    type: string
+    default: '30'
+    values:
+      - '10'
+      - '20'
+      - '30'
+
+pool:
+  name: AgentHub-SelfHosted
+  demands:
+    - Agent.OS -equals Linux
+
+variables:
+  ACESTEP_COMMIT: ca1e85fe9430179831e6bc6be790c332190a3866
+  ACESTEP_INIT_LLM: 'false'
+  ACESTEP_COMPILE_MODEL: 'false'
+  ACE_STEP_SUPPRESS_AUDIO_TOKENS: '1'
+  HF_HUB_DISABLE_TELEMETRY: '1'
+  TOKENIZERS_PARALLELISM: 'false'
+
+steps:
+  - checkout: self
+    clean: true
+    persistCredentials: false
+
+  - bash: chmod +x scripts/ace-step-cpu-benchmark.sh && scripts/ace-step-cpu-benchmark.sh
+    displayName: Run ACE-Step CPU benchmark
+    env:
+      BENCHMARK_DURATION: ${{ parameters.durationSeconds }}
+      ACESTEP_COMMIT: $(ACESTEP_COMMIT)
+      ACESTEP_INIT_LLM: $(ACESTEP_INIT_LLM)
+      ACESTEP_COMPILE_MODEL: $(ACESTEP_COMPILE_MODEL)
+      ACE_STEP_SUPPRESS_AUDIO_TOKENS: $(ACE_STEP_SUPPRESS_AUDIO_TOKENS)
+      HF_HUB_DISABLE_TELEMETRY: $(HF_HUB_DISABLE_TELEMETRY)
+      TOKENIZERS_PARALLELISM: $(TOKENIZERS_PARALLELISM)
+
+  - task: PublishPipelineArtifact@1
+    condition: always()
+    inputs:
+      targetPath: benchmark
+      artifact: ace-step-cpu-benchmark
+      publishLocation: pipeline
+    displayName: Publish benchmark evidence
