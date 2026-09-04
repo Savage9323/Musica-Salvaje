@@ -1,0 +1,68 @@
+# Manual FFmpeg rendering pipeline. Output stays private as an Azure Pipeline artifact.
+trigger: none
+pr: none
+
+parameters:
+  - name: audioUrl
+    displayName: Audio URL (MP3/WAV)
+    type: string
+  - name: imageUrl
+    displayName: Optional cover image URL
+    type: string
+    default: ''
+  - name: outputName
+    displayName: Output filename
+    type: string
+    default: 'musica-salvaje-render.mp4'
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: none
+
+  - bash: |
+      set -euo pipefail
+      command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+      curl -L --fail --retry 3 --retry-delay 2 --max-time 180 '${{ parameters.audioUrl }}' -o audio.input
+      SIZE=$(stat -c%s audio.input)
+      test "$SIZE" -ge 10000 || { echo "Downloaded audio is too small: $SIZE bytes"; exit 1; }
+      ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 audio.input
+    displayName: Download and validate audio
+
+  - bash: |
+      set -euo pipefail
+      IMAGE_URL='${{ parameters.imageUrl }}'
+      if [ -n "$IMAGE_URL" ]; then
+        curl -L --fail --retry 3 --retry-delay 2 --max-time 90 "$IMAGE_URL" -o cover.input || true
+      fi
+      if [ ! -s cover.input ]; then
+        ffmpeg -y -f lavfi -i color=c=black:size=1024x1024:rate=1 -frames:v 1 cover.jpg
+      else
+        ffmpeg -y -i cover.input -frames:v 1 -vf 'scale=1024:1024:force_original_aspect_ratio=decrease,pad=1024:1024:(ow-iw)/2:(oh-ih)/2' cover.jpg
+      fi
+    displayName: Prepare cover image
+
+  - bash: |
+      set -euo pipefail
+      OUTPUT='${{ parameters.outputName }}'
+      case "$OUTPUT" in
+        *.mp4) ;;
+        *) echo 'outputName must end in .mp4'; exit 1 ;;
+      esac
+      test "$(basename "$OUTPUT")" = "$OUTPUT" || { echo 'outputName must be a filename, not a path'; exit 1; }
+      ffmpeg -y -loop 1 -i cover.jpg -i audio.input \
+        -c:v libx264 -preset medium -tune stillimage -c:a aac -b:a 192k \
+        -pix_fmt yuv420p -movflags +faststart -shortest "$OUTPUT"
+      test -s "$OUTPUT"
+      ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "$OUTPUT"
+      mkdir -p render-output
+      mv "$OUTPUT" render-output/
+    displayName: Render private staging video
+
+  - task: PublishPipelineArtifact@1
+    inputs:
+      targetPath: render-output
+      artifact: private-render
+      publishLocation: pipeline
+    displayName: Publish private render artifact
